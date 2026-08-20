@@ -1,0 +1,65 @@
+[
+  {
+    "id": "CASH_BANK_CONFIRMATION",
+    "name": "Obtain bank confirmation",
+    "audit_areas": ["cash"],
+    "assertions": ["existence", "rights_and_obligations"],
+    "procedure_type": "external_confirmation",
+    "evidence_strength": "high",
+    "description": "Obtain independent confirmation of year-end bank balances and relevant account information."
+  },
+  {
+    "id": "CASH_RECONCILIATION_REVIEW",
+    "name": "Review bank reconciliation",
+    "audit_areas": ["cash"],
+    "assertions": ["existence", "completeness", "accuracy"],
+    "procedure_type": "test_of_details",
+    "evidence_strength": "medium",
+    "description": "Inspect the year-end bank reconciliation and investigate material reconciling items."
+  },
+  {
+    "id": "INV_PHYSICAL_COUNT",
+    "name": "Observe and test physical inventory count",
+    "audit_areas": ["inventory"],
+    "assertions": ["existence", "completeness"],
+    "procedure_type": "observation_test_of_details",
+    "evidence_strength": "high",
+    "description": "Observe inventory counting and perform selected test counts."
+  },
+  {
+    "id": "INV_COST_TEST",
+    "name": "Test recorded inventory cost",
+    "audit_areas": ["inventory"],
+    "assertions": ["accuracy", "valuation"],
+    "procedure_type": "test_of_details",
+    "evidence_strength": "medium",
+    "description": "Test selected inventory costs to supporting purchase or production records."
+  },
+  {
+    "id": "INV_AGED_STOCK_REVIEW",
+    "name": "Review aged and slow-moving inventory",
+    "audit_areas": ["inventory"],
+    "assertions": ["valuation"],
+    "procedure_type": "analytical_test_of_details",
+    "evidence_strength": "medium",
+    "description": "Review inventory ageing and investigate aged or slow-moving items for potential write-down."
+  },
+  {
+    "id": "INV_SUBSEQUENT_SALES",
+    "name": "Test post-year-end sales",
+    "audit_areas": ["inventory"],
+    "assertions": ["valuation"],
+    "procedure_type": "test_of_details",
+    "evidence_strength": "high",
+    "description": "Inspect post-year-end sales evidence for selected inventory items to assess carrying value."
+  },
+  {
+    "id": "INV_RIGHTS_REVIEW",
+    "name": "Inspect evidence of inventory ownership",
+    "audit_areas": ["inventory"],
+    "assertions": ["rights_and_obligations"],
+    "procedure_type": "inspection",
+    "evidence_strength": "medium",
+    "description": "Inspect relevant purchase, consignment or third-party documentation to assess ownership rights."
+  }
+]

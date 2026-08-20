@@ -1,0 +1,19 @@
+{
+  "cash": {
+    "candidate_assertions": [
+      "existence",
+      "completeness",
+      "accuracy",
+      "rights_and_obligations"
+    ]
+  },
+  "inventory": {
+    "candidate_assertions": [
+      "existence",
+      "completeness",
+      "accuracy",
+      "valuation",
+      "rights_and_obligations"
+    ]
+  }
+}

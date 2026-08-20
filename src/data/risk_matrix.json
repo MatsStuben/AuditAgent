@@ -1,0 +1,8 @@
+{
+  "label": "Prototype MVP risk matrix. Not an ISA-prescribed mapping.",
+  "matrix": {
+    "low":    { "low": "low",    "medium": "low",    "high": "medium" },
+    "medium": { "low": "low",    "medium": "medium", "high": "high"   },
+    "high":   { "low": "medium", "medium": "high",   "high": "high"   }
+  }
+}

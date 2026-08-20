@@ -1,0 +1,23 @@
+[
+  {
+    "id": "ISA315.29",
+    "standard": "ISA 315",
+    "paragraphs": ["29"],
+    "purpose": "Determine relevant assertions for material balances.",
+    "linked_object_type": "AssertionAssessment"
+  },
+  {
+    "id": "ISA315.28b_31",
+    "standard": "ISA 315",
+    "paragraphs": ["28(b)", "31"],
+    "purpose": "Identify and assess assertion-level risks using likelihood and magnitude.",
+    "linked_object_type": "RiskAssessment"
+  },
+  {
+    "id": "ISA330.6_7",
+    "standard": "ISA 330",
+    "paragraphs": ["6", "7"],
+    "purpose": "Design procedures responsive to assessed risks and obtain more persuasive evidence as risk increases.",
+    "linked_object_type": "Procedure"
+  }
+]
