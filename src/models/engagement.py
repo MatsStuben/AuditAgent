@@ -76,6 +76,20 @@ class AuditEngagement(BaseModel):
     company_facts: list[CompanyFact] = Field(default_factory=list)
     materiality: Materiality | None = None
     line_items: list[FinancialLineItemAssessment] = Field(default_factory=list)
+    id_sequences: dict[str, int] = Field(default_factory=dict)
+    """Monotonic ID counters, one per object-type prefix. See `next_id`."""
+
+    def next_id(self, prefix: str) -> str:
+        """Allocate the next never-before-used ID for `prefix`, e.g. "fact_3".
+
+        Monotonic for the engagement's whole lifetime, and deliberately *not* reset when a
+        collection is replaced. IDs are the traceability contract (SPEC 14): a reused ID
+        would let a retained reference — in an `AuditorFeedback` snapshot, or in an object
+        awaiting an explicit recompute — silently resolve to different evidence. Never
+        reusing means such a reference is visibly unresolved instead of quietly wrong.
+        """
+        self.id_sequences[prefix] = self.id_sequences.get(prefix, 0) + 1
+        return f"{prefix}_{self.id_sequences[prefix]}"
 
     def line_item(self, line_item_type: str) -> FinancialLineItemAssessment | None:
         """Look up a line item by its type, e.g. "inventory"."""

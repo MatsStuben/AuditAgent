@@ -206,6 +206,35 @@ def test_in_scope_audit_areas_is_empty_before_scoping():
     assert engagement.in_scope_audit_areas == []
 
 
+def test_next_id_is_monotonic_per_prefix():
+    """IDs are the traceability contract (SPEC 14) and must never be reused."""
+    engagement = _engagement()
+
+    assert [engagement.next_id("fact") for _ in range(3)] == ["fact_1", "fact_2", "fact_3"]
+    # Prefixes are independent counters.
+    assert engagement.next_id("risk") == "risk_1"
+    assert engagement.next_id("fact") == "fact_4"
+
+
+def test_next_id_does_not_reset_when_a_collection_is_replaced():
+    engagement = _engagement()
+    engagement.company_facts = [
+        CompanyFact(id=engagement.next_id("fact"), fact_type="a", value="b", rationale="c")
+    ]
+
+    engagement.company_facts = []  # replaced, e.g. after a context edit
+
+    assert engagement.next_id("fact") == "fact_2"
+
+
+def test_id_counters_are_per_engagement():
+    first, second = _engagement(), _engagement()
+    first.next_id("fact")
+    first.next_id("fact")
+
+    assert second.next_id("fact") == "fact_1"
+
+
 def test_new_line_item_starts_unassessed():
     item = FinancialLineItemAssessment(
         id="li_cash", line_item_type="cash", cy=3_120_000, py=2_890_000

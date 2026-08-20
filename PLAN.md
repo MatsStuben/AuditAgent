@@ -98,7 +98,7 @@ audit-engine/
 6. **LLM-returned `supporting_fact_ids` are validated against the engagement's actual facts** and unknown IDs
    are dropped with a warning rather than stored — otherwise traceability silently breaks.
 7. **The pipeline is headless and importable.** `run_pipeline(engagement, client)` has no Streamlit
-   dependency, which is what lets M13's evals and M4–M12's tests run it directly. The UI only calls into it.
+   dependency, which is what lets the M13 evals and M4–M12's tests run it directly. The UI only calls into it.
 8. **Risk rating is derived, never asked for (SPEC §11).** The LLM returns `likelihood` and `magnitude` only;
    `RiskAssessmentOutput` has no `risk_rating` field, so the model cannot supply one. `engine/risk_matrix.py`
    maps the pair to `system_rating` through `risk_matrix.json`. The matrix is config, not Python constants and
@@ -109,7 +109,8 @@ audit-engine/
 ## Milestones
 
 Each milestone ends with `ruff check .` and `pytest` green. Milestones are ordered so the whole engine works
-headlessly (M0–M11) before the UI (M13) is written.
+headlessly (M0–M12) before the UI (M14) is written. The one exception to strict linear order is M13a, which
+sits right after the pipeline so live judgement feedback arrives while prompts are still being tuned.
 
 ### M0 — Project skeleton and tooling
 
@@ -397,27 +398,81 @@ after (proves no auto-update of methodology).
 
 ---
 
-### M13 — Eval scenarios
+### Two kinds of live test
 
-**Adds:** the SPEC §22 fixed scenarios, run against the live model, opt-in.
+Both are opt-in and deselected by default; they answer different questions and fail for different reasons.
 
-**Files:** `evals/scenarios.py` (contexts A/B, identical financials), `evals/run_evals.py`,
-`evals/test_evals.py` marked `@pytest.mark.eval` (deselected by default; run with `pytest -m eval`).
+| Marker | Question | Where |
+| --- | --- | --- |
+| `llm` | Does the **plumbing** work — structured output round-trips, enums enforced, IDs referenceable? | Alongside each service's unit tests, added as that service is built (M3–M7) |
+| `eval` | Is the model's **judgement** sensible and responsive to company context? | `evals/`, M13a and M13b |
 
-Assertions are **comparative and ordinal**, never exact-string — that is what makes them stable against model
-variation:
-- A and B: valuation relevant in both.
-- C: `rank(risk_B) > rank(risk_A)` for inventory valuation on identical numbers — the core claim of the product.
-- B selects at least as many valuation procedures as A, and includes at least one `evidence_strength="high"`
-  one (SPEC §22, ISA 330.7 responsiveness).
-- D and E are already covered deterministically by M11/M12 tests; the eval runner re-runs them end to end.
+A green `llm` suite with a red `eval` suite means the prompts are wrong, not the code.
 
-The runner prints a side-by-side A/B table so prompt tuning has a fixed target (SPEC §22: fixtures before
-tuning).
+---
+
+### M13a — Scenario fixtures and context-sensitivity evals
+
+**Adds:** the SPEC §22 A/B/C scenarios against the live model. Deliberately placed straight after the
+pipeline, because SPEC §22 opens with *"create fixed scenarios before aggressively tuning prompts"* — prompts
+written in M4–M7 otherwise get no judgement feedback until the end of the build.
+
+**Files:** `evals/scenarios.py` (contexts A and B over identical financials), `evals/run_evals.py`,
+`evals/test_context_sensitivity.py` marked `@pytest.mark.eval`.
+
+Assertions are **comparative and ordinal** wherever possible — exact-string matching on model prose would be
+brittle — but comparative alone is not enough, so each is paired with an absolute bound:
+
+| Check | Assertion |
+| --- | --- |
+| Context moves risk (SPEC §22 C) | `rank(risk_B) > rank(risk_A)` for inventory valuation on identical numbers — the core product claim |
+| Scale has not collapsed | B's inventory valuation risk is `medium` or `high`; A's is not `high` |
+| Assertion relevance is sensible | valuation relevant in both; **and** A's count of relevant assertions ≤ B's |
+| Procedures respond to context | B selects at least as many valuation procedures as A, including at least one `evidence_strength="high"` (ISA 330.7) |
+
+The absolute bounds exist because ordering alone is satisfiable by a degenerate model: `A=low, B=medium`
+passes `rank(B) > rank(A)`, but so would a collapsed scale where aged seasonal inventory is rated `low`. The
+relevant-assertion count catches the opposite failure — a model that marks everything relevant.
+
+`run_evals.py` prints a side-by-side A/B table so prompt tuning has a fixed target to read.
 
 **Verify:** `pytest -m eval`. Uses the key in `.env` (Decision log #4).
 
-**Depends on:** M8–M12.
+**Depends on:** M8.
+
+---
+
+### M13b — Override and feedback evals
+
+**Adds:** SPEC §22 D/E end to end, plus the one claim no cross-scenario comparison can evidence.
+
+**Files:** `evals/test_risk_response.py`, `evals/test_feedback_evals.py`, both marked `@pytest.mark.eval`.
+
+- **Risk level drives procedure selection, isolated from context** (SPEC §25.8). Same scenario, same context;
+  override inventory valuation risk `high → low` and re-run selection. The procedure set must weaken — fewer
+  procedures, or losing its `evidence_strength="high"` member. M13a varies context and risk together, so it
+  cannot separate the two; this holds context fixed and moves only the rating.
+- **D**: the override path end to end — `system_rating` retained, `final_rating` updated, procedures reselected,
+  unrelated areas untouched.
+- **E**: a generalizable override is classified and produces a `pending_review` `RuleProposal`, with the static
+  JSON files unchanged.
+
+D and E are already covered deterministically in M11/M12 against the fake; these run the same paths against the
+live model.
+
+**Verify:** `pytest -m eval`.
+
+**Depends on:** M11, M12.
+
+---
+
+### Eval flakiness policy
+
+Evals call a non-deterministic model and are **advisory, not a gate**. They are excluded from the default
+`pytest` run and are not a CI blocker. A failure means read the printed A/B table and judge whether the prompt
+regressed or the model simply phrased things differently — never auto-retry until green, which would tune the
+suite rather than the prompts. If a check proves genuinely unstable across runs, loosen that check to an
+ordinal comparison or drop it; do not add retries.
 
 ---
 
@@ -445,7 +500,7 @@ edit context → observe assertion/risk change → override an inventory risk hi
 cash left untouched → inspect traceability → inspect coverage → generate a rule proposal. Everything
 pre-populated, no blank forms (SPEC §16). Automated coverage stays in M11–M13; the UI is verified by walkthrough.
 
-**Depends on:** M11, M12 (M13 optional).
+**Depends on:** M11, M12 (the M13 evals are independent of the UI).
 
 ---
 
@@ -501,10 +556,13 @@ pytest                 # deterministic suite; no network, no API key
 Opt-in suites:
 
 ```bash
-pytest -m llm          # live SDK smoke test
-pytest -m eval         # SPEC §22 scenarios A–E against the live model
-python evals/run_evals.py   # prints the A/B comparison table
+pytest -m llm          # plumbing: the seam works against the live API
+pytest -m eval         # judgement: SPEC §22 scenarios A–E against the live model (advisory)
+python evals/run_evals.py   # prints the A/B comparison table for prompt tuning
 ```
+
+Neither runs by default. `llm` failing means the integration broke; `eval` failing means the prompts regressed
+— read the A/B table rather than retrying.
 
 Full demo:
 

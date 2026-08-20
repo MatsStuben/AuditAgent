@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, model_validator
 
 from src.models.audit_objects import Assertion, EvidenceStrength, RiskLevel
-from src.models.isa import ISARequirement
+from src.models.isa import ISARequirement, LinkedObjectType
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -103,6 +103,16 @@ class StaticConfig(BaseModel):
     def candidate_assertions(self, audit_area: str) -> list[Assertion]:
         profile = self.audit_area_profiles.get(audit_area)
         return list(profile.candidate_assertions) if profile else []
+
+    def isa_refs_for(self, linked_object_type: LinkedObjectType) -> list[str]:
+        """IDs of the ISA requirements a given runtime object type addresses.
+
+        Looked up rather than hard-coded in each service, so a new ISA requirement is added
+        by editing `isa_requirements.json` alone (SPEC 4).
+        """
+        return [
+            r.id for r in self.isa_requirements if r.linked_object_type == linked_object_type
+        ]
 
 
 def _duplicates(values: list[str]) -> list[str]:
