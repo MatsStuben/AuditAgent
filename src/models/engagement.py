@@ -36,8 +36,12 @@ class DerivedMetrics(BaseModel):
 
     yoy_change: float
     yoy_change_pct: float | None = None
-    """None when the prior-year amount is zero, rather than a fabricated percentage."""
+    """Percentage points, e.g. 43.55 for a +43.55% movement.
+
+    None when the prior-year amount is zero, rather than a fabricated percentage.
+    """
     amount_to_materiality_ratio: float
+    """CY amount as a multiple of materiality, e.g. 33.97 for inventory."""
 
 
 class FinancialLineItemAssessment(BaseModel):
