@@ -103,7 +103,9 @@ def _area(item: FinancialLineItemAssessment) -> str:
         if procedure.requires_approval:
             marker += "— AUDITOR APPROVAL REQUIRED ***"
         lines.append(
-            f"    {procedure.id}  {procedure.procedure_id or '(new)':<26}"
+            # 30, not 26: CASH_RECONCILIATION_REVIEW is itself 26 characters, and a field
+            # exactly as wide as its longest value leaves no space before the next column.
+            f"    {procedure.id}  {procedure.procedure_id or '(new)':<30}"
             f"evidence={strength:<11}addresses {', '.join(procedure.risk_ids)}{marker}"
         )
         lines.append(f"        {procedure.name}")

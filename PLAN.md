@@ -689,6 +689,20 @@ resulting pending proposals.
 **Hard rule (AGENTS.md review criterion):** no domain logic in `app.py`. It reads session state and calls
 `engine`/`llm` functions. Anything that looks like a calculation or a decision belongs in `engine/`.
 
+**As built.** Facts are editable through `recompute.update_company_facts` (`2n` calls, no
+re-extraction, IDs preserved); remove and approve take the auditor's own reason, since procedure
+feedback is the clearest input M12 has. `run_pipeline` is transactional like the overrides —
+`engine/snapshot.py` holds the `capture`/`restore` pair both it and `recompute` use, in its own
+module because `recompute` imports `pipeline`.
+
+`tests/test_ui.py` drives the app headlessly with Streamlit's `AppTest` — seven tests,
+no network. The walkthrough stays manual, but one failure is worth automating: an engine signature
+changes and the UI keeps rendering while doing nothing. `test_overriding_a_rating_goes_through_recompute`
+asserts the feedback record *and* the re-selection call, so a direct `risk.final_rating = ...` would
+fail even though the screen would look identical. The client is built on first use rather than at
+startup, so the deterministic half of the screen — case data, materiality, scoping — comes up
+without credentials.
+
 **Verify:** `streamlit run src/ui/app.py` and walk the demo path manually: load → inspect materiality →
 edit context → observe assertion/risk change → override an inventory risk high→low → see procedures update and
 cash left untouched → inspect traceability → inspect coverage → generate a rule proposal. Everything

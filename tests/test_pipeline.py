@@ -203,6 +203,51 @@ def test_ids_are_unique_across_the_whole_engagement(engagement):
     assert len(ids) == len(set(ids))
 
 
+# --- a failed run leaves nothing half-applied -----------------------------------------
+
+
+def test_a_run_that_fails_on_the_second_area_leaves_the_engagement_untouched(static_config):
+    """`run_pipeline` is all-or-nothing (SPEC 17).
+
+    Facts and inventory succeed, then cash fails. Keeping what landed would put a screen in
+    front of the auditor that reads as a finished audit plan with one area silently missing —
+    the same failure the overrides guard against, and the first run is no exception.
+    """
+    engagement = load_engagement(static_config)
+    client = ScriptedLLMClient(
+        extract_company_facts=scripted_facts(),
+        analyse_audit_area=[
+            scripted_analysis(
+                Assertion.VALUATION, static_config.candidate_assertions("inventory")
+            ),
+            LLMError("API unavailable"),  # cash
+        ],
+        select_procedures=scripted_selection("INV_SUBSEQUENT_SALES", "risk_1"),
+    )
+
+    with pytest.raises(LLMError):
+        run_pipeline(engagement, client=client, config=static_config)
+
+    assert engagement.company_facts == []
+    assert engagement.materiality is None
+    assert all(item.metrics is None and item.material is None for item in engagement.line_items)
+    assert all(not item.assertions and not item.procedures for item in engagement.line_items)
+
+
+def test_a_failed_run_does_not_reuse_the_ids_it_consumed(static_config):
+    """SPEC 14: a retained reference stays visibly unresolved rather than silently rebound."""
+    engagement = load_engagement(static_config)
+    client = ScriptedLLMClient(
+        extract_company_facts=scripted_facts(),
+        analyse_audit_area=LLMError("API unavailable"),
+    )
+
+    with pytest.raises(LLMError):
+        run_pipeline(engagement, client=client, config=static_config)
+
+    assert engagement.id_sequences["fact"] == 1  # fact_1 was spent and is gone for good
+
+
 # --- run_area ------------------------------------------------------------------------
 
 

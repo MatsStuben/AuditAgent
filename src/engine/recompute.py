@@ -38,8 +38,9 @@ from src.engine.catalogue import filter_catalogue
 from src.engine.materiality import calculate_materiality
 from src.engine.pipeline import clear_area, run_area
 from src.engine.scoping import scope_line_items
+from src.engine.snapshot import capture, restore
 from src.llm.client import LLMClient
-from src.llm.context_extractor import extract_company_facts
+from src.llm.context_extractor import FACT_ID_PREFIX, extract_company_facts
 from src.llm.procedure_selector import PROCEDURE_ID_PREFIX, select_procedures
 from src.models.audit_objects import (
     AssertionAssessment,
@@ -48,7 +49,11 @@ from src.models.audit_objects import (
     RiskAssessment,
     RiskLevel,
 )
-from src.models.engagement import AuditEngagement, FinancialLineItemAssessment
+from src.models.engagement import (
+    AuditEngagement,
+    CompanyFact,
+    FinancialLineItemAssessment,
+)
 from src.models.feedback import AuditorFeedback
 from src.models.isa import LinkedObjectType
 
@@ -129,43 +134,6 @@ def record_feedback(
     )
     engagement.feedback.append(feedback)
     return feedback
-
-
-# --- rollback ------------------------------------------------------------------------------
-
-
-def _capture(engagement: AuditEngagement) -> tuple:
-    """Everything an engagement-wide recompute may replace, so a failure can put it back.
-
-    Shallow by design: it records *which objects* the engagement points at, not their
-    contents. That is enough because these paths replace lists and rebind fields rather than
-    editing existing objects in place — and it means a rollback restores the original objects
-    themselves, so a UI still holding one is not left pointing at an orphaned copy.
-    """
-    return (
-        engagement.company_context,
-        engagement.company_facts,
-        engagement.materiality,
-        [
-            (item, item.cy, item.metrics, item.material, item.is_audit_area,
-             item.assertions, item.procedures)
-            for item in engagement.line_items
-        ],
-    )
-
-
-def _restore(engagement: AuditEngagement, state: tuple) -> None:
-    context, facts, materiality, items = state
-    engagement.company_context = context
-    engagement.company_facts = facts
-    engagement.materiality = materiality
-    for item, cy, metrics, material, is_audit_area, assertions, procedures in items:
-        item.cy = cy
-        item.metrics = metrics
-        item.material = material
-        item.is_audit_area = is_audit_area
-        item.assertions = assertions
-        item.procedures = procedures
 
 
 # --- lookups -----------------------------------------------------------------------------
@@ -524,7 +492,7 @@ def update_company_context(
         return None
 
     before = {"company_context": engagement.company_context}
-    state = _capture(engagement)
+    state = capture(engagement)
 
     try:
         engagement.company_context = company_context
@@ -532,7 +500,7 @@ def update_company_context(
         for line_item in engagement.in_scope_audit_areas:
             run_area(line_item, engagement, client=client, config=config)
     except Exception:
-        _restore(engagement, state)
+        restore(engagement, state)
         raise
 
     return record_feedback(
@@ -541,6 +509,64 @@ def update_company_context(
         object_id="company_context",
         before=before,
         after={"company_context": company_context},
+        reason=reason,
+    )
+
+
+def update_company_facts(
+    engagement: AuditEngagement,
+    facts: list[CompanyFact],
+    reason: str = "",
+    *,
+    client: LLMClient,
+    config: StaticConfig | None = None,
+) -> AuditorFeedback | None:
+    """Replace the extracted facts and re-run every audit area on them (SPEC 3.2, 17).
+
+    Extraction is a model output, and an auditor who can see a fact is wrong should be able to
+    correct it without rewriting the company context and paying for a re-extraction that may
+    make the same mistake. `2n` calls — the context itself has not changed, so the facts are
+    not re-extracted.
+
+    IDs are the traceability contract (SPEC 14). A fact keeps its ID through an edit, so
+    anything already citing it still resolves; a fact with a blank ID is new and is allocated
+    one from the monotonic counter. An ID that names nothing in the current set is rejected
+    rather than quietly created, because that is how a stale UI round-trip would silently
+    resurrect deleted evidence.
+
+    Areas are re-run rather than left alone because the assessments cite facts by ID: deleting
+    one would otherwise leave assertions and risks pointing at evidence the file no longer
+    holds.
+    """
+    known = {fact.id for fact in engagement.company_facts}
+    unknown = {fact.id for fact in facts if fact.id and fact.id not in known}
+    if unknown:
+        raise RecomputeError(f"{sorted(unknown)} are not facts of this engagement")
+
+    resolved = [
+        fact if fact.id else fact.model_copy(update={"id": engagement.next_id(FACT_ID_PREFIX)})
+        for fact in facts
+    ]
+    if [f.model_dump() for f in resolved] == [f.model_dump() for f in engagement.company_facts]:
+        return None
+
+    before = {"company_facts": [f.model_dump() for f in engagement.company_facts]}
+    state = capture(engagement)
+
+    try:
+        engagement.company_facts = resolved
+        for line_item in engagement.in_scope_audit_areas:
+            run_area(line_item, engagement, client=client, config=config)
+    except Exception:
+        restore(engagement, state)
+        raise
+
+    return record_feedback(
+        engagement,
+        object_type="engagement",
+        object_id="company_facts",
+        before=before,
+        after={"company_facts": [f.model_dump() for f in resolved]},
         reason=reason,
     )
 
@@ -578,7 +604,7 @@ def update_financials(
         return None
 
     before = {t: engagement.line_item(t).cy for t in changed}
-    state = _capture(engagement)
+    state = capture(engagement)
 
     try:
         for line_item_type, amount in changed.items():
@@ -597,7 +623,7 @@ def update_financials(
     except Exception:
         # Restores the figures and the materiality they moved, not just the audit work: a
         # half-applied scope change is a threshold that no longer matches the file under it.
-        _restore(engagement, state)
+        restore(engagement, state)
         raise
 
     return record_feedback(

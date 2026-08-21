@@ -17,6 +17,7 @@ from src.engine.recompute import (
     override_risk_rating,
     remove_procedure,
     update_company_context,
+    update_company_facts,
     update_financials,
 )
 from src.llm.client import LLMError, LLMTask
@@ -26,6 +27,7 @@ from src.models.audit_objects import (
     ProcedureSource,
     RiskLevel,
 )
+from src.models.engagement import CompanyFact
 from tests.conftest import (
     CASH_RISK,
     INVENTORY_RISK,
@@ -544,6 +546,98 @@ def test_an_unchanged_context_does_nothing(engagement):
     client = ScriptedLLMClient()
 
     assert update_company_context(engagement, engagement.company_context, client=client) is None
+    assert engagement.feedback == []
+
+
+def test_editing_a_fact_keeps_its_id_and_reruns_the_areas(static_config, engagement):
+    """SPEC 14: the ID is the traceability contract, so a corrected fact is still the same
+    fact. Extraction is not re-run — the context has not changed, and asking again would risk
+    repeating the mistake being corrected."""
+    fact = engagement.company_facts[0]
+    corrected = fact.model_copy(update={"value": "over 18 months"})
+    client = ScriptedLLMClient(
+        analyse_audit_area=[
+            scripted_analysis(
+                Assertion.VALUATION, static_config.candidate_assertions("inventory")
+            ),
+            scripted_analysis(Assertion.EXISTENCE, static_config.candidate_assertions("cash")),
+        ],
+        select_procedures=[
+            scripted_selection("INV_SUBSEQUENT_SALES", "risk_3"),
+            scripted_selection("CASH_BANK_CONFIRMATION", "risk_4"),
+        ],
+    )
+
+    feedback = update_company_facts(
+        engagement, [corrected], "The ageing report says 18.", client=client, config=static_config
+    )
+
+    assert [f.id for f in engagement.company_facts] == [fact.id]
+    assert engagement.company_facts[0].value == "over 18 months"
+    assert client.call_count(LLMTask.EXTRACT_COMPANY_FACTS) == 0
+    assert client.call_count(LLMTask.ANALYSE_AUDIT_AREA) == 2
+    assert feedback.before["company_facts"][0]["value"] == "over 12 months"
+
+
+def test_a_new_fact_is_allocated_an_id(static_config, engagement):
+    client = ScriptedLLMClient(
+        analyse_audit_area=[
+            scripted_analysis(
+                Assertion.VALUATION, static_config.candidate_assertions("inventory")
+            ),
+            scripted_analysis(Assertion.EXISTENCE, static_config.candidate_assertions("cash")),
+        ],
+        select_procedures=[
+            scripted_selection("INV_SUBSEQUENT_SALES", "risk_3"),
+            scripted_selection("CASH_BANK_CONFIRMATION", "risk_4"),
+        ],
+    )
+    added = CompanyFact(
+        id="", fact_type="segregation", value="two warehouses", rationale="The auditor knows."
+    )
+
+    update_company_facts(
+        engagement,
+        [*engagement.company_facts, added],
+        "Missed by extraction.",
+        client=client,
+        config=static_config,
+    )
+
+    assert [f.id for f in engagement.company_facts] == ["fact_1", "fact_2"]
+
+
+def test_a_fact_id_the_engagement_does_not_hold_is_rejected(engagement):
+    """A stale round-trip must not resurrect deleted evidence under its old ID."""
+    with pytest.raises(RecomputeError, match="fact_99"):
+        update_company_facts(
+            engagement,
+            [CompanyFact(id="fact_99", fact_type="x", value="y", rationale="z")],
+            client=ScriptedLLMClient(),
+        )
+
+
+def test_unchanged_facts_do_nothing(engagement):
+    client = ScriptedLLMClient()
+
+    assert (
+        update_company_facts(engagement, list(engagement.company_facts), client=client) is None
+    )
+    assert engagement.feedback == []
+    assert client.calls == []
+
+
+def test_a_failed_fact_edit_restores_the_previous_facts(engagement):
+    facts = engagement.company_facts
+
+    with pytest.raises(LLMError):
+        update_company_facts(
+            engagement,
+            [facts[0].model_copy(update={"value": "changed"})],
+            client=FailingLLMClient(error=LLMError("API unavailable")),
+        )
+
+    assert engagement.company_facts is facts
     assert engagement.feedback == []
 
 

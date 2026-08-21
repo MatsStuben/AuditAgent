@@ -17,6 +17,7 @@ import logging
 from src.config.loader import StaticConfig, get_config
 from src.engine.materiality import calculate_materiality
 from src.engine.scoping import scope_line_items
+from src.engine.snapshot import capture, restore
 from src.llm.audit_area_analyser import analyse_audit_area
 from src.llm.client import LLMClient
 from src.llm.context_extractor import extract_company_facts
@@ -111,21 +112,32 @@ def run_pipeline(
 
     Returns the same engagement for convenience. Mutation is the point of this function, so
     it is not pure — unlike the services it orchestrates, which return their results.
+
+    All five calls or none of them. A run that extracted facts and analysed inventory before
+    the cash call failed would leave an engagement that renders as a finished audit plan with
+    one area silently missing — the same failure mode the overrides in `engine.recompute`
+    guard against, and there is no reason the first run should be the exception.
     """
     config = config or get_config()
+    state = capture(engagement)
 
-    engagement.company_facts = extract_company_facts(engagement, client=client)
+    try:
+        engagement.company_facts = extract_company_facts(engagement, client=client)
 
-    engagement.materiality = calculate_materiality(engagement)
-    scope_line_items(engagement, config)
+        engagement.materiality = calculate_materiality(engagement)
+        scope_line_items(engagement, config)
 
-    for line_item in engagement.line_items:
-        # Material alone is not enough: an implemented profile is what makes a line item an
-        # audit area (SPEC 2.1). Both services guard this too; the loop keeps it explicit.
-        if not line_item.material or not line_item.is_audit_area:
-            clear_area(line_item)
-            continue
-        run_area(line_item, engagement, client=client, config=config)
+        for line_item in engagement.line_items:
+            # Material alone is not enough: an implemented profile is what makes a line item
+            # an audit area (SPEC 2.1). Both services guard this too; the loop keeps it
+            # explicit.
+            if not line_item.material or not line_item.is_audit_area:
+                clear_area(line_item)
+                continue
+            run_area(line_item, engagement, client=client, config=config)
+    except Exception:
+        restore(engagement, state)
+        raise
 
     logger.info(
         "pipeline complete: %d line items scoped, %d audit areas analysed",

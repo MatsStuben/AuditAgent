@@ -994,7 +994,7 @@ The auditor should be able to:
 
 - inspect company data,
 - edit company context,
-- inspect extracted company facts,
+- inspect and correct extracted company facts,
 - inspect assertion decisions,
 - change assertion relevance,
 - inspect risk reasoning,
@@ -1072,7 +1072,22 @@ scope keeps its existing work even where its own amount moved, because re-analys
 override held in that area and a figure edit is not, by itself, a reason to destroy the auditor's
 judgements. Re-running such an area is available explicitly, not automatic.
 
-**A recompute either completes or leaves the engagement as it was.** LLM calls fail, and a
+```text
+company facts edited
+→ rerun audit area analysis for every audit area       [1 call per area]
+→ rerun procedure selection for every audit area       [1 call per area]
+→ rerun ISA coverage
+```
+
+Facts are **not** re-extracted on a fact edit: the context has not changed, and asking the model
+again would risk repeating the mistake being corrected. A fact keeps its ID through an edit, so
+anything already citing it still resolves (Section 14); the areas are rerun because assessments
+cite facts by ID, and a deleted fact would otherwise leave them pointing at evidence the file no
+longer holds.
+
+**A recompute either completes or leaves the engagement as it was.** This includes the initial
+pipeline run: a run that extracted facts and analysed one area before the next call failed would
+leave a screen that reads as a finished audit plan with an area silently missing. LLM calls fail, and a
 half-applied override is worse than a failed one: it puts a new rating above the old work, or a
 new context above assessments drawn from the old one, with nothing on screen to say so. Each
 override restores what it changed if any call in its sequence fails, and records its
