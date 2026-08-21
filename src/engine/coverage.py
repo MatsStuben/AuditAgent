@@ -17,10 +17,17 @@ is then a JSON edit (SPEC 4). The dispatch table must cover the whole enum — a
 raises rather than silently reporting full coverage of a requirement nothing was checked
 against.
 
+The object type decides *which rule applies*; it does not decide whether the requirement is
+addressed. An object counts only where it records the requirement in its own `isa_refs`, the
+same links `traceability` reads. Coverage reports what the audit file claims, not what its
+shape implies — otherwise adding a requirement to config would mark it covered by work that has
+never referenced it, and work that lost its reference would still read as coverage.
+
 Deterministic and read-only. No LLM.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Protocol
 
 from pydantic import BaseModel
 
@@ -50,8 +57,8 @@ class CoverageGap(BaseModel):
 class RequirementCoverage(BaseModel):
     requirement: ISARequirement
     addressed_by: list[str] = []
-    """IDs of the runtime objects addressing this requirement, deduplicated. One procedure
-    answering two risks addresses ISA 330.6/7 once."""
+    """IDs of the runtime objects that record this requirement in their `isa_refs`,
+    deduplicated. One procedure answering two risks addresses ISA 330.6/7 once."""
     gaps: list[CoverageGap] = []
 
     @property
@@ -124,6 +131,30 @@ def check_isa_coverage(
 Evaluation = tuple[list[str], list[CoverageGap]]
 
 
+class _Linked(Protocol):
+    id: str
+    isa_refs: list[str]
+
+
+def _claiming(objects: Sequence[_Linked], requirement: ISARequirement) -> list[_Linked]:
+    """The objects that actually record this requirement (SPEC 14)."""
+    return [obj for obj in objects if requirement.id in obj.isa_refs]
+
+
+def _unclaimed_note(objects: Sequence[_Linked], requirement: ISARequirement) -> str:
+    """Why nothing counted, when work exists but does not reference the requirement.
+
+    Worth distinguishing from missing work: the two need different fixes. Absent work needs
+    an audit decision; work that exists without the reference means the requirement was added
+    to config after the area was last run, and re-running it will attach the reference.
+    """
+    return (
+        f" ({len(objects)} present, none recording {requirement.id})"
+        if objects
+        else ""
+    )
+
+
 def _assertion_coverage(
     engagement: AuditEngagement, requirement: ISARequirement
 ) -> Evaluation:
@@ -131,7 +162,8 @@ def _assertion_coverage(
     addressed: list[str] = []
     gaps: list[CoverageGap] = []
     for area in engagement.in_scope_audit_areas:
-        if not area.assertions:
+        claiming = _claiming(area.assertions, requirement)
+        if not claiming:
             gaps.append(
                 CoverageGap(
                     requirement_id=requirement.id,
@@ -139,11 +171,11 @@ def _assertion_coverage(
                     object_id=area.id,
                     description=(
                         f"{area.line_item_type} is a material audit area with no assertion "
-                        f"assessments"
+                        f"assessments{_unclaimed_note(area.assertions, requirement)}"
                     ),
                 )
             )
-        addressed.extend(assertion.id for assertion in area.assertions)
+        addressed.extend(assertion.id for assertion in claiming)
     return addressed, gaps
 
 
@@ -159,7 +191,8 @@ def _risk_coverage(engagement: AuditEngagement, requirement: ISARequirement) -> 
         for assertion in area.assertions:
             if not assertion.relevant:
                 continue
-            if not assertion.risks:
+            claiming = _claiming(assertion.risks, requirement)
+            if not claiming:
                 gaps.append(
                     CoverageGap(
                         requirement_id=requirement.id,
@@ -168,10 +201,11 @@ def _risk_coverage(engagement: AuditEngagement, requirement: ISARequirement) -> 
                         description=(
                             f"{area.line_item_type}/{assertion.assertion.value} is relevant "
                             f"but has no risk assessment"
+                            f"{_unclaimed_note(assertion.risks, requirement)}"
                         ),
                     )
                 )
-            addressed.extend(risk.id for risk in assertion.risks)
+            addressed.extend(risk.id for risk in claiming)
     return addressed, gaps
 
 
@@ -191,21 +225,25 @@ def _procedure_coverage(
     for area in engagement.in_scope_audit_areas:
         for risk in area.all_risks:
             responses = area.procedures_for(risk.id)
-            effective = [p for p in responses if not p.requires_approval]
+            claiming = _claiming(responses, requirement)
+            effective = [p for p in claiming if not p.requires_approval]
             if not effective:
+                if claiming:
+                    reason = f"{risk.id} has a proposed response awaiting auditor approval"
+                else:
+                    reason = (
+                        f"{risk.id} has no responsive procedure"
+                        f"{_unclaimed_note(responses, requirement)}"
+                    )
                 gaps.append(
                     CoverageGap(
                         requirement_id=requirement.id,
                         line_item_type=area.line_item_type,
                         object_id=risk.id,
-                        description=(
-                            f"{risk.id} has a proposed response awaiting auditor approval"
-                            if responses
-                            else f"{risk.id} has no responsive procedure"
-                        ),
+                        description=reason,
                     )
                 )
-            addressed.extend(p.id for p in responses)
+            addressed.extend(p.id for p in claiming)
     return _deduplicated(addressed), gaps
 
 

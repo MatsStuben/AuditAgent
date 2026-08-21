@@ -953,6 +953,21 @@ material — audit logic not implemented in MVP
 They are an acknowledged scope boundary, not an ISA gap. Reporting the six non-implemented Raiatea items as
 gaps would bury the one real gap this feature exists to surface.
 
+Coverage follows pipeline scope, so a line item that is material but has no implemented methodology, or that is
+an audit area but is not material, is outside it either way. A descoped area is cleared (Section 17), so
+evaluating it would report gaps for work the engagement deliberately dropped.
+
+An object counts as addressing a requirement only where it records that requirement in its own `isa_refs` —
+the same links forward traceability walks (Section 14). The object type decides which coverage rule applies; it
+does not decide whether the requirement is addressed. Otherwise adding a requirement to configuration would
+mark it covered by work that has never referenced it, and work that lost its reference would still read as
+coverage. A new requirement is picked up by re-running the affected area, not by editing config.
+
+An unapproved AI suggestion does not close an ISA 330.6/7 gap. Section 13 says a suggestion will not be used
+without auditor approval, so treating one as a response would report a risk as answered by work that is not yet
+part of the plan. The suggestion is still listed among the objects addressing the requirement, so the panel can
+show that a proposed response exists and is waiting on a decision.
+
 This is not intended to prove full ISA compliance.
 
 It demonstrates that the architecture can support progressive requirement coverage.

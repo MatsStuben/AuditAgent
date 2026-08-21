@@ -2,17 +2,11 @@
 
 import pytest
 
-from src.engine.pipeline import load_engagement, run_pipeline
+from src.engine.pipeline import load_engagement
 from src.engine.traceability import TraceabilityError, trace_procedure
 from src.models.audit_objects import Assertion, Procedure
 from src.models.engagement import CompanyFact
-from tests.conftest import (
-    INVENTORY_RISK,
-    scripted_analysis,
-    scripted_facts,
-    scripted_selection,
-)
-from tests.fakes import ScriptedLLMClient
+from tests.conftest import INVENTORY_RISK
 
 
 def inventory_procedure(engagement) -> Procedure:
@@ -92,34 +86,6 @@ def test_tracing_is_read_only(engagement):
 
 
 # --- fan-out: one procedure, several risks -----------------------------------------------
-
-
-@pytest.fixture
-def two_risk_engagement(static_config):
-    """Inventory valuation carrying two risks, both answered by one procedure.
-
-    The case SPEC 14 calls out: `INV_SUBSEQUENT_SALES` addresses valuation, so both risks on
-    that assertion are legitimately its responsibility.
-    """
-    analysis = scripted_analysis(
-        Assertion.VALUATION, static_config.candidate_assertions("inventory")
-    )
-    valuation = next(a for a in analysis.assertions if a.assertion is Assertion.VALUATION)
-    valuation.risks.append(
-        valuation.risks[0].model_copy(update={"description": "A second, distinct risk."})
-    )
-    client = ScriptedLLMClient(
-        extract_company_facts=scripted_facts(),
-        analyse_audit_area=[
-            analysis,
-            scripted_analysis(Assertion.EXISTENCE, static_config.candidate_assertions("cash")),
-        ],
-        select_procedures=[
-            scripted_selection("INV_SUBSEQUENT_SALES", "risk_1", "risk_2"),
-            scripted_selection("CASH_BANK_CONFIRMATION", "risk_3"),
-        ],
-    )
-    return run_pipeline(load_engagement(static_config), client=client, config=static_config)
 
 
 def test_one_procedure_two_risks_yields_two_chains(two_risk_engagement):

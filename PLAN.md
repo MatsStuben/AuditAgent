@@ -404,11 +404,35 @@ procedure — resolved via `procedures_for(risk.id)`, since procedures live on t
 per requirement, the list of addressing object IDs plus any gaps, and separately a list of material
 non-audit-area line items labelled `material — audit logic not implemented in MVP`.
 
+Three rules follow from reading SPEC §15 against the rest of the spec, all recorded in SPEC §15:
+
+- **An object counts only where it records the requirement in its own `isa_refs`** — the same links M9 walks
+  forward. The object type selects the rule; it does not decide whether the requirement is addressed. Without
+  this, adding a requirement to `isa_requirements.json` would mark it covered by work that never referenced
+  it, and work that lost its reference would still read as coverage. A new requirement is picked up by
+  re-running the area, not by editing config.
+
+- **Coverage follows pipeline scope**, so material-but-not-implemented and implemented-but-immaterial are both
+  outside it. A descoped area is cleared (SPEC §17), so evaluating it would report gaps for work the
+  engagement deliberately dropped.
+- **An unapproved AI suggestion does not close an ISA330.6_7 gap.** SPEC §13 says a suggestion will not be used
+  without approval, so counting one would report a risk as answered by work not yet in the plan. It still
+  appears in `addressed_by`, so the panel can show a proposed response waiting on a decision.
+
 **Verify:** `tests/test_coverage.py` — the M8 fixture reports **zero** gaps; the six non-audit-area line items
 appear in the "not implemented" list and **not** as ISA315.29 gaps (this is the test that encodes the
 decision — without it the panel would show six false gaps and bury the real one); removing a risk ID from the
 procedures that cover it produces exactly one `ISA330.6_7` gap naming that risk and leaves the other two
-requirements clean, **including for the other risks the same procedure still covers**.
+requirements clean, **including for the other risks the same procedure still covers**; a shared procedure is
+listed once, not once per risk; an unapproved suggestion gaps while an approved one does not; a non-relevant
+assertion with no risks is not a gap; stripping `isa_refs` at any one level gaps that requirement and leaves
+the other two clean; adding a fourth requirement leaves an existing engagement *uncovered* until the pipeline
+is re-run, at which point it is covered with no code change; and an object type with no dispatch entry raises
+instead of silently reporting full coverage.
+
+The `two_risk_engagement` fixture moves from `test_traceability.py` into `conftest.py` here — it is the fixture
+for anything that must not treat a procedure as answering exactly one risk, which is true of coverage as well
+as traceability.
 
 **Depends on:** M8, M9.
 

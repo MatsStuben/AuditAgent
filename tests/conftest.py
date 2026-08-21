@@ -137,3 +137,33 @@ def client(static_config) -> ScriptedLLMClient:
 def engagement(static_config, client) -> AuditEngagement:
     """A fully linked engagement: facts, materiality, scoping, assertions, risks, procedures."""
     return run_pipeline(load_engagement(static_config), client=client, config=static_config)
+
+
+@pytest.fixture
+def two_risk_engagement(static_config) -> AuditEngagement:
+    """As `engagement`, but inventory valuation carries two risks answered by one procedure.
+
+    The shared-procedure case SPEC 14 calls out. `INV_SUBSEQUENT_SALES` addresses valuation,
+    so both risks on that assertion are legitimately its responsibility — which is what makes
+    this the fixture for anything that must not treat a procedure as answering exactly one
+    risk. Cash takes `risk_3` here, since inventory consumes two IDs.
+    """
+    analysis = scripted_analysis(
+        Assertion.VALUATION, static_config.candidate_assertions("inventory")
+    )
+    valuation = next(a for a in analysis.assertions if a.assertion is Assertion.VALUATION)
+    valuation.risks.append(
+        valuation.risks[0].model_copy(update={"description": "A second, distinct risk."})
+    )
+    client = ScriptedLLMClient(
+        extract_company_facts=scripted_facts(),
+        analyse_audit_area=[
+            analysis,
+            scripted_analysis(Assertion.EXISTENCE, static_config.candidate_assertions("cash")),
+        ],
+        select_procedures=[
+            scripted_selection("INV_SUBSEQUENT_SALES", "risk_1", "risk_2"),
+            scripted_selection("CASH_BANK_CONFIRMATION", "risk_3"),
+        ],
+    )
+    return run_pipeline(load_engagement(static_config), client=client, config=static_config)
