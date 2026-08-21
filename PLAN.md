@@ -287,10 +287,19 @@ Each returned procedure names the `risk_ids` it addresses, and becomes **one** r
 that list — never one copy per risk. Procedures are attached to `FinancialLineItemAssessment.procedures`;
 `procedures_for(risk_id)` resolves the relationship in the other direction for traceability and coverage.
 
-Rejected rather than stored: a `procedure_id` outside the area's catalogue subset, a `risk_id` that is not one
-of the area's risks, and a procedure left with no valid risk IDs at all (`Procedure.risk_ids` has
-`min_length=1`, so an empty one cannot be constructed). Unknown risk IDs are dropped from an otherwise-valid
-procedure; the procedure is discarded only if that empties the list.
+Rejected rather than stored: a `procedure_id` outside the area's catalogue subset; a `risk_id` that is not one
+of the area's risks; a `risk_id` whose **assertion is not one the catalogue entry addresses** (an
+existence-only procedure cannot answer a valuation risk — storing that link would make M10 report the risk as
+covered while approved methodology says otherwise); and a procedure left with no valid risk IDs
+(`Procedure.risk_ids` has `min_length=1`, so an empty one cannot be constructed). Unusable IDs are dropped
+from an otherwise-valid procedure; it is discarded only if that empties the list. AI suggestions are not
+assertion-constrained — they have no catalogue mapping to contradict.
+
+**Partial catalogue coverage.** When an area has risks but *no* catalogue procedure covers their assertions,
+the call is still made with an explicit "no approved procedures match" catalogue section, and only AI
+suggestions can survive it. SPEC §13 permits a suggestion precisely in that situation, so short-circuiting
+would make the feature unreachable in the one case it exists for. The shipped config happens to cover every
+candidate assertion, but validation only requires one procedure per *area*, so this is reachable on extension.
 
 `suggested_new_procedures` become `Procedure` objects with `source="ai_suggestion"`, `approved=False` and the
 `AI SUGGESTION — AUDITOR APPROVAL REQUIRED` label (SPEC §13).
@@ -299,9 +308,10 @@ procedure; the procedure is discarded only if that empties the list.
 rerun would leave procedures pointing at risks from the previous run. `dangling_risk_ids()` asserts this in
 tests.
 
-**Verify:** `tests/test_catalogue.py` (pure) — `("inventory", "valuation")` returns exactly
-`INV_AGED_STOCK_REVIEW` and `INV_SUBSEQUENT_SALES`; `("cash", "valuation")` returns `[]`; filtering is
-data-driven (a synthetic catalogue yields the right subset with zero code change).
+**Verify:** `tests/test_catalogue.py` (pure) — `("inventory", "valuation")` returns `INV_COST_TEST`,
+`INV_AGED_STOCK_REVIEW` and `INV_SUBSEQUENT_SALES` (three, not two: `INV_COST_TEST` covers accuracy *and*
+valuation); `("cash", "valuation")` returns `[]`; filtering is data-driven (a synthetic catalogue yields the
+right subset with zero code change).
 `tests/test_procedure_selector.py` — **exactly one call per area** whatever the risk count; a procedure naming
 two `risk_ids` produces **one** `Procedure` reachable from both risks via `procedures_for`; each has
 `isa_refs=["ISA330.6_7"]` and `source="catalogue"`; out-of-subset procedure IDs and unknown risk IDs are
@@ -316,7 +326,23 @@ rejected; an AI suggestion is flagged unapproved; re-selection replaces rather t
 
 **Adds:** `run_pipeline()` — the exact SPEC §6 sequence, headless and importable.
 
-**Files:** `src/engine/pipeline.py` (`load_engagement`, `run_pipeline`).
+**Files:** `src/engine/pipeline.py` (`load_engagement`, `run_pipeline`, `run_area`, `clear_area`),
+`src/demo.py`.
+
+`run_area` is the unit M11 re-runs: it **clears the area's procedures before re-analysing**, because
+re-analysis replaces the risks those procedures name. Without that, a failure between the two calls would
+leave procedures pointing at risks that no longer exist.
+
+`clear_area` is the other half of SPEC §17's rescoping rule. A line item that is no longer *both* material and
+an audit area has its assertions, risks and procedures dropped rather than merely skipped — otherwise a rerun
+after a PBT change would leave out-of-scope work in place for traceability and coverage to render as live.
+Metrics and `is_audit_area` are kept, since the line item is still displayed. Deterministic, no LLM call.
+
+`src/demo.py` (`python -m src.demo`) runs the whole pipeline against Raiatea and prints the audit plan —
+materiality, the scoped line items, extracted facts, and per area the assertions, risks with
+likelihood/magnitude/derived rating, and every procedure with its risk links. It is how the engine is
+inspected end to end before the UI exists, and the base M13a's `run_evals.py` builds on. Presentation only:
+no domain logic.
 
 **Verify:** `tests/test_pipeline.py` with a fully scripted fake covering every call:
 - All 8 line items get metrics and a material flag; only cash and inventory acquire assertion assessments
@@ -328,6 +354,8 @@ rejected; an AI suggestion is flagged unapproved; re-selection replaces rather t
   selections. This is the SPEC §6.1 budget, and the test is what stops it regressing toward per-assertion or
   per-risk calls as prompts are tuned.
 - No call's user message mentions more than one audit area.
+- **Rescoping clears what it descopes**: after a rerun that pushes cash below materiality, its assertions and
+  procedures are gone, no call was spent on it, and inventory is still analysed.
 
 This test's fixture becomes the shared engagement fixture for M9–M11.
 
@@ -384,27 +412,38 @@ a one-shot generator.
 **Files:** `src/engine/recompute.py`, `src/models/feedback.py` (already defined in M1, used here).
 
 Explicit functions, one per override type, each recording an `AuditorFeedback` (`object_type`, `object_id`,
-`before`, `after`, `reason`) before mutating, and each recomputing only its own subtree:
+`before`, `after`, `reason`) before mutating, and each recomputing only its own dependency subtree.
 
-Recompute granularity follows the call structure (SPEC §17): the unit is the audit area, not the risk.
+**Call scope and mutation scope are deliberately different.** Audit-area analysis remains an area-level LLM
+call, but procedure updates must be as narrow as the changed risk relationship permits. A scoped procedure
+selection call accepts the changed `risk_id` (or a set of changed IDs), then merges its result into the existing
+area procedure list. Procedures whose `risk_ids` are disjoint from that set retain their existing objects and
+links. A procedure that also addresses a changed risk is in the affected closure: it may be updated, but its
+still-valid links to other risks must be preserved. This prevents an override in one assertion from silently
+replacing procedure work for unrelated assertions in the same audit area.
 
 | Override | Recomputes | LLM calls |
 | --- | --- | --- |
-| `override_risk_rating` | procedure selection for that **area**, then coverage. Never re-analyses: `likelihood`, `magnitude` and `system_rating` are the original conclusion and must survive | 1 |
-| `override_assertion_relevance` → not relevant | drops that assertion's risks and their procedures, then coverage | 0 |
+| `override_risk_rating` | scoped procedure selection for that risk's affected procedure closure, merged into the area list, then coverage. Never re-analyses: `likelihood`, `magnitude` and `system_rating` are the original conclusion and must survive | 1 |
+| `override_assertion_relevance` → not relevant | drops that assertion's risks; detaches only those risk IDs from procedures, retaining a procedure while it still covers other risks; then coverage | 0 |
 | `override_assertion_relevance` → relevant | re-analyses that area, then reselects its procedures. **Replaces every assertion and risk in the area**, discarding overrides held on them — the UI must warn first | 2 |
 | `override_procedures` (add/remove/approve) | coverage only. "Remove" means detaching one `risk_id`; the procedure survives if it still covers others, and is dropped only when its last reference goes | 0 |
 | `update_company_context` | re-extract facts, then both calls for every audit area | 1 + 2n |
 | `update_financials` | materiality → scoping → both calls for any area entering or leaving scope | ≤ 2n |
 
 The risk-rating row is the one that matters most: it is the common override, it is Scenario D, and routing it
-around re-analysis is what keeps the original system output intact.
+around re-analysis is what keeps the original system output intact. It must also preserve procedure objects
+whose risk links are unrelated to the override; the test suite checks identity, not merely equality, for those
+objects.
 
 **Verify:** `tests/test_recompute.py` — this is SPEC §22 Scenario D as a test:
 - Override inventory valuation risk high → low: `system_rating` still `"high"`, `final_rating` `"low"`,
-  `is_overridden` True, `override_reason` stored, procedure selection called again for that risk **only**.
-- **Unrelated branches are untouched** — assert the cash subtree objects are the *same instances*
-  (identity, not equality) before and after. This is the check that catches over-eager recomputation.
+  `is_overridden` True, `override_reason` stored, one scoped procedure-selection call made for that risk.
+- **Unrelated procedure work is untouched** — assert procedures whose `risk_ids` are disjoint from the changed
+  risk are the *same instances* (identity, not equality) before and after, including where they sit in the same
+  audit area. A shared procedure retains its still-valid links to other risks.
+- **Unrelated audit areas are untouched** — assert the cash subtree objects are the same instances before and
+  after. These identity checks catch over-eager recomputation at both levels.
 - An `AuditorFeedback` record exists with the correct before/after, and the original system output is
   recoverable from it.
 - Assertion relevance true→false removes exactly that assertion's risks and procedures; flipping back
@@ -447,14 +486,51 @@ A green `llm` suite with a red `eval` suite means the prompts are wrong, not the
 
 ---
 
+### M8a — Grounding the LLM layer (done, out of sequence)
+
+**Adds:** the SPEC §21.1 epistemic rules and the SPEC §22 Scenario F eval that enforces them. Prompted by the
+first end-to-end Raiatea run, which produced audit-plausible fiction: store floats, card settlements in transit,
+third-party logistics providers and stock controls that had "not kept pace with expansion", none of them
+supplied. Extraction was leaking too — `growth_profile = fast-growing` came back with the rationale *"which may
+strain controls and complicate comparability"*, turning a judgement into a cited fact.
+
+Prompt, input-context and eval work only. No change to the four services, the 5-call budget or the domain model.
+
+**Files:** `src/llm/prompts.py` (all five prompt constants), `src/llm/schemas.py` (`CompanyFactOutput` field
+descriptions), `src/data/raiatea.json` (richer context), `evals/scenarios.py`,
+`evals/test_unsupported_inference.py`, `tests/test_eval_helpers.py`.
+
+Two halves that only work together:
+
+- **Stricter rules.** The shared preamble names the four kinds of information (SPEC §21.1); extraction takes
+  literal statements only; analysis may use a generic mechanism but not invent the company-specific cause, and
+  may not rule an assertion out from silence; selection adds no facts; the generalizer does not reconstruct
+  reasoning behind a thin reason.
+- **Richer context.** Forbidding inference-from-silence with a two-sentence context would produce bland
+  everything-is-relevant output. The shipped context now describes both areas, including explicit negatives
+  ("no restricted cash balances"), which is what makes ruling an assertion out legitimate again. Its two
+  control facts — a year-end count, monthly reconciliations — are supplied because they bear on procedure
+  feasibility, and the preamble's inherent-before-controls rule keeps them from lowering an assessed risk.
+
+**Verify:** `tests/test_eval_helpers.py` tests the scanners offline — an eval is only informative if the thing
+doing the checking is known to work, and a false negative would make Scenario F pass while asserting nothing.
+`evals/test_unsupported_inference.py` runs two live scenarios (the short context, kept as a fixture for being
+the highest-pressure case, and the shipped one): no unsupplied circumstances at any stage, no ruling out from
+silence, no cross-area fact citation, and inventory valuation still relevant, still ≥ medium, still drawing
+procedures.
+
+**Depends on:** M8.
+
+---
+
 ### M13a — Scenario fixtures and context-sensitivity evals
 
 **Adds:** the SPEC §22 A/B/C scenarios against the live model. Deliberately placed straight after the
 pipeline, because SPEC §22 opens with *"create fixed scenarios before aggressively tuning prompts"* — prompts
 written in M4–M7 otherwise get no judgement feedback until the end of the build.
 
-**Files:** `evals/scenarios.py` (contexts A and B over identical financials), `evals/run_evals.py`,
-`evals/test_context_sensitivity.py` marked `@pytest.mark.eval`.
+**Files:** `evals/scenarios.py` (already exists from M8a — contexts A and B over identical financials are
+added to it), `evals/run_evals.py`, `evals/test_context_sensitivity.py` marked `@pytest.mark.eval`.
 
 Assertions are **comparative and ordinal** wherever possible — exact-string matching on model prose would be
 brittle — but comparative alone is not enough, so each is paired with an absolute bound:

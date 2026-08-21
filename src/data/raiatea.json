@@ -1,6 +1,7 @@
 {
   "company": "Raiatea Ltd",
   "year_end": "2025-12-31",
+  "company_context": "Raiatea is a fast-growing fashion retailer. Inventory is highly seasonal and a meaningful share of inventory is more than 12 months old. Inventory is held across two warehouses and the company performs a full physical count at year end. Some inventory is held on consignment from suppliers, and management applies an ageing-based write-down policy to slow-moving stock.\n\nThe company holds cash across three bank accounts, all in GBP. Bank reconciliations are prepared monthly. There are no restricted cash balances or foreign-currency accounts. The company does not hold material physical cash at year end.",
   "line_items": [
     {"type": "turnover", "cy": 52400000, "py": 47100000},
     {"type": "profit_before_tax", "cy": 5240000, "py": 4850000},

@@ -99,7 +99,9 @@ Provide an editable free-text input.
 
 Example:
 
-> Raiatea is a fast-growing fashion retailer. Inventory is highly seasonal and a meaningful share of inventory is more than 12 months old.
+> Raiatea is a fast-growing fashion retailer. Inventory is highly seasonal and a meaningful share of inventory is more than 12 months old. Inventory is held across two warehouses and the company performs a full physical count at year end. Some inventory is held on consignment from suppliers, and management applies an ageing-based write-down policy to slow-moving stock.
+>
+> The company holds cash across three bank accounts, all in GBP. Bank reconciliations are prepared monthly. There are no restricted cash balances or foreign-currency accounts. The company does not hold material physical cash at year end.
 
 Keep the raw context.
 
@@ -141,10 +143,15 @@ The MVP starts with exactly five static JSON files.
 
 Contains one engagement input with exactly the eight financial line items supplied in the case:
 
+It also carries the starting `company_context` (Section 3.2), so the engagement is
+pre-populated rather than starting from a blank form (Section 16). The auditor edits the
+context at runtime; the file is never written back to.
+
 ```json
 {
   "company": "Raiatea Ltd",
   "year_end": "2025-12-31",
+  "company_context": "Raiatea is a fast-growing fashion retailer. Inventory is highly seasonal and a meaningful share of inventory is more than 12 months old. Inventory is held across two warehouses and the company performs a full physical count at year end. Some inventory is held on consignment from suppliers, and management applies an ageing-based write-down policy to slow-moving stock.\n\nThe company holds cash across three bank accounts, all in GBP. Bank reconciliations are prepared monthly. There are no restricted cash balances or foreign-currency accounts. The company does not hold material physical cash at year end.",
   "line_items": [
     {"type": "turnover", "cy": 52400000, "py": 47100000},
     {"type": "profit_before_tax", "cy": 5240000, "py": 4850000},
@@ -1023,8 +1030,15 @@ company context changes
 PBT changes
 → materiality changes
 → line item scope may change
-→ any area entering or leaving scope reruns both of its calls
+→ an area ENTERING scope runs both of its calls        [2 LLM calls]
+→ an area LEAVING scope has its assertions, risks and
+  procedures cleared                                   [0 LLM calls]
 ```
+
+Clearing a descoped area is not optional. Skipping it would leave assertions, risks and
+procedures in place for a line item that is no longer material, and traceability and coverage
+would then present out-of-scope work as live. Its derived metrics and `is_audit_area` flag are
+kept, because the line item is still displayed (Section 3.3) — only the audit work goes.
 
 Rerunning audit area analysis **replaces every assertion and risk in that area**, discarding
 auditor overrides held on them. That is the cost of batching an area into one call, and the UI
@@ -1252,6 +1266,41 @@ Do not introduce LangChain, LangGraph, an agent framework, or custom orchestrati
 
 For the MVP, direct Anthropic SDK calls are preferred.
 
+### 21.1 What the model may treat as known
+
+Every prompt shares a preamble that distinguishes four kinds of information. The distinction
+is the difference between an audit conclusion and a plausible story about a retailer:
+
+| # | Kind | Status |
+| --- | --- | --- |
+| 1 | Supplied company facts — the context text and the extracted `CompanyFact` objects | Evidence about this company |
+| 2 | Supplied financial data — amounts, derived metrics, materiality | Evidence about this company |
+| 3 | Generic audit and accounting knowledge — how misstatements arise, how auditors respond | Used to *interpret* (1) and (2); never a source of facts about this company |
+| 4 | Company-specific circumstances that were not supplied | Forbidden |
+
+Three rules follow, and every prompt is written against them:
+
+- **Absence of information is not evidence of the opposite.** Where the input is silent the
+  matter is unknown. An assertion may be ruled out on a supplied fact or on the inherent nature
+  of the line item, never because nothing was said about it. This is why the starting
+  `company_context` (Section 3.2) states negatives explicitly — "there are no restricted cash
+  balances" is a fact, and it is what makes ruling cash valuation out legitimate.
+- **Generic mechanism, supplied circumstance.** A risk may name the general way a misstatement
+  arises. It may not invent the company-specific cause: locations, outlets, systems,
+  counterparties, transaction types, currencies, arrangements or events that were not supplied.
+- **Inherent risk before controls.** Likelihood and magnitude are assessed without reference to
+  control effectiveness, and the model may not assert that a control is weak, absent or under
+  strain. The context does describe some controls (a year-end count, monthly reconciliations)
+  because they bear on which procedures are feasible; they do not lower an assessed risk.
+  Control-risk modelling stays deferred (Section 26).
+
+Extraction is where this matters most, because a fact is cited by ID downstream and so becomes
+evidence. `CompanyFact` values and rationales are normalised restatements of what the context
+says, not conclusions drawn from it: *fast-growing* is a fact, *controls may be under strain* is
+not.
+
+Compliance is checked by live evals (Section 22), not by inspection.
+
 ---
 
 ## 22. Evaluation fixtures
@@ -1316,6 +1365,34 @@ Expected:
 - LLM classifies it,
 - if generalizable, candidate methodology rule is produced,
 - production methodology remains unchanged.
+
+### Scenario F — unsupported inference
+
+The short two-sentence context of an earlier revision, run end to end. It says nothing whatever
+about cash, so every company-specific detail the model produces for cash under it is invented.
+Kept as a fixture precisely because it is the highest-pressure case; the shipped context
+(Section 3.2) is run alongside it.
+
+Expected, in both directions:
+
+- no extracted fact, risk description, rationale or procedure rationale introduces a
+  circumstance absent from what that call was supplied — checked by scanning model-authored
+  text for a list of plausible-but-unsupplied terms, minus any the input itself contains,
+- an assertion ruled out cites a supplied fact or rests on the inherent nature of the item,
+  rather than on the input having been silent,
+- discipline has not cost judgement: inventory valuation is still relevant, still rated at
+  least medium, and still draws procedures.
+
+Which assertions are ruled out is the model's judgement and is not fixed by the eval — only the
+grounds are.
+
+The term scan has two tiers, because some vocabulary *is* the assertion. Rights and obligations
+for cash is definitionally about amounts subject to restriction, pledge or third-party
+entitlement; for inventory it is about consignment and goods held for others. "Cash may include
+amounts subject to third-party entitlement" states the generic mechanism and is permitted; "cash
+held at the group's escrow agent" invents a circumstance, and no pattern distinguishes them. So
+concrete operational vocabulary (tills, warehouses, card settlements, control weaknesses) is a
+hard failure, and assertion vocabulary is reported for a human to read in context.
 
 ---
 

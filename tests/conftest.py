@@ -1,12 +1,9 @@
-"""Shared fixtures.
-
-`raiatea_engagement` builds an unscoped engagement straight from static config. M8 introduces
-the real `load_engagement`; this fixture is expected to delegate to it at that point.
-"""
+"""Shared fixtures."""
 
 import pytest
 
 from src.config.loader import StaticConfig, load_config
+from src.engine.pipeline import load_engagement
 from src.models.engagement import AuditEngagement, FinancialLineItemAssessment
 
 
@@ -16,17 +13,15 @@ def static_config() -> StaticConfig:
 
 
 def build_engagement(config: StaticConfig) -> AuditEngagement:
-    """An engagement with line items loaded but nothing assessed yet."""
-    return AuditEngagement(
-        company=config.engagement_input.company,
-        year_end=config.engagement_input.year_end,
-        line_items=[
-            FinancialLineItemAssessment(
-                id=f"li_{li.type}", line_item_type=li.type, cy=li.cy, py=li.py
-            )
-            for li in config.engagement_input.line_items
-        ],
-    )
+    """An engagement with line items loaded but nothing assessed yet.
+
+    Delegates to the real `load_engagement` so fixtures cannot drift from production, then
+    blanks the seeded context — most tests set their own, and those that do not should see
+    the no-context path rather than a silently inherited one.
+    """
+    engagement = load_engagement(config)
+    engagement.company_context = ""
+    return engagement
 
 
 @pytest.fixture

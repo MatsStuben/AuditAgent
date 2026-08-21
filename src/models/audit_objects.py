@@ -64,7 +64,13 @@ class Procedure(BaseModel):
     description: str
     procedure_type: str
     """Free-form by design: the catalogue must stay data-driven (SPEC 12)."""
-    evidence_strength: EvidenceStrength
+    evidence_strength: EvidenceStrength | None = None
+    """None for an AI suggestion, which has no assessed strength.
+
+    Evidence strength is approved methodology carried by the catalogue, not something to ask
+    the model for — an unapproved suggestion has simply not been assessed, and inventing a
+    value would misrepresent it as vetted.
+    """
     rationale: str
     source: ProcedureSource = ProcedureSource.CATALOGUE
     approved: bool = True

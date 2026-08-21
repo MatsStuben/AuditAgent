@@ -28,8 +28,14 @@ class CompanyFactOutput(BaseModel):
     """
 
     fact_type: str = Field(description="Short snake_case category, e.g. inventory_seasonality.")
-    value: str = Field(description="The value of the fact, e.g. high.")
-    rationale: str = Field(description="What in the context supports this fact.")
+    value: str = Field(
+        description="What the context states, restated plainly, e.g. high. Not a conclusion "
+        "drawn from it."
+    )
+    rationale: str = Field(
+        description="The part of the company context this fact restates. Point to what the "
+        "text says, never to what it might imply or lead to."
+    )
 
 
 class CompanyFactsOutput(BaseModel):

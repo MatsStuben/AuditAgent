@@ -35,6 +35,12 @@ class EngagementInput(BaseModel):
 
     company: str
     year_end: str
+    company_context: str = ""
+    """The starting free-text context (SPEC 3.2).
+
+    Seeded here so the engagement is pre-populated rather than starting from a blank form
+    (SPEC 16). The auditor edits it at runtime; this file is never written back to.
+    """
     line_items: list[LineItemInput]
 
 
