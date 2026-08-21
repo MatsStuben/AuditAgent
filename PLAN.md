@@ -682,7 +682,7 @@ item table (all 8, showing metrics, material flag, and whether it is an audit ar
 editable fact list; per-audit-area assertion cards with a relevance toggle and rationale; risk cards showing
 likelihood, magnitude and the matrix-derived `system_rating` alongside `final_rating`, with an override
 control and reason box;
-procedure lists with add-from-catalogue / remove / approve-AI-suggestion; a traceability view for a selected
+procedure lists with add-from-catalogue / add-auditor-procedure / remove / approve-AI-suggestion; a traceability view for a selected
 procedure; an ISA coverage panel; a feedback log with an "analyse for methodology rule" action and the
 resulting pending proposals.
 
@@ -748,7 +748,10 @@ the UI.
 - **Overrides recompute on an explicit apply/regenerate action**, not on every widget change — Streamlit
   reruns on every interaction and LLM calls are paid. Stale downstream sections are badged until recomputed.
 - **No persistence.** Session state only (SPEC §2 excludes a database).
-- **Auditor-added procedures come from the filtered catalogue picker**, so `procedure_id` always resolves.
+- **Auditors can add an engagement-specific procedure outside the catalogue.** It is marked
+  `AUDITOR-ADDED — NOT CATALOGUE METHODOLOGY`, has no evidence-strength claim, and is active
+  because the auditor chose it. Its required reason becomes procedure feedback eligible for
+  M12 analysis; neither action writes the catalogue JSON.
 
 ---
 

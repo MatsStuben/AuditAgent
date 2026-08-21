@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from src.config.loader import DATA_DIR
-from src.engine.recompute import override_risk_rating, update_company_context
+from src.engine.recompute import (
+    add_auditor_procedure,
+    override_risk_rating,
+    update_company_context,
+)
 from src.llm.client import LLMTask
 from src.llm.feedback_generalizer import (
     UNRESOLVED,
@@ -183,6 +187,26 @@ def test_the_prompt_does_not_carry_unrelated_audit_work(overridden):
 
     (call,) = client.calls
     assert "cash" not in call.user.lower()
+
+
+def test_an_auditor_added_procedure_is_described_as_such_for_methodology_analysis(
+    static_config, engagement
+):
+    """A non-catalogue addition must not be misrepresented to the LLM as an AI suggestion."""
+    feedback = add_auditor_procedure(
+        engagement,
+        INVENTORY_RISK,
+        "Inspect signed customer orders",
+        "Inspect orders supporting the stock held at year end.",
+        "The stock is contractually pre-sold to named customers.",
+        config=static_config,
+    )
+
+    message = build_user_message(engagement, feedback)
+
+    assert "auditor-added procedure" in message
+    assert "AI suggestion" not in message
+    assert "Inspect signed customer orders" in message
 
 
 def test_a_record_whose_object_is_gone_still_describes_the_override(static_config, overridden):

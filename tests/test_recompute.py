@@ -11,6 +11,7 @@ import pytest
 from src.engine.coverage import check_isa_coverage
 from src.engine.recompute import (
     RecomputeError,
+    add_auditor_procedure,
     add_catalogue_procedure,
     approve_procedure,
     override_assertion_relevance,
@@ -429,6 +430,54 @@ def test_adding_a_catalogue_procedure(static_config, engagement):
     assert added.approved is True
     assert added.isa_refs == ["ISA330.6_7"]
     assert feedback.object_id == added.id
+
+
+def test_adding_an_auditor_procedure_is_active_but_remains_unassessed_methodology(
+    static_config, engagement
+):
+    """It closes the engagement's response gap without claiming catalogue approval."""
+    inventory = engagement.line_item("inventory")
+    inventory.procedures = []
+
+    feedback = add_auditor_procedure(
+        engagement,
+        INVENTORY_RISK,
+        "Inspect signed customer orders",
+        "Inspect signed customer orders supporting the stock held at year end.",
+        "The stock is contractually pre-sold to named customers.",
+        config=static_config,
+    )
+
+    added = inventory.procedures[0]
+    assert added.procedure_id is None
+    assert added.source is ProcedureSource.AUDITOR_ADDED
+    assert added.approved is True
+    assert added.evidence_strength is None
+    assert added.risk_ids == [INVENTORY_RISK]
+    assert added.isa_refs == ["ISA330.6_7"]
+    assert feedback.object_id == added.id
+    assert feedback.after["source"] == "auditor_added"
+    assert check_isa_coverage(engagement, static_config).satisfied
+
+
+@pytest.mark.parametrize(
+    ("name", "description", "reason", "message"),
+    [
+        (" ", "Description", "Reason", "name"),
+        ("Name", " ", "Reason", "description"),
+        ("Name", "Description", " ", "reason"),
+    ],
+)
+def test_an_auditor_procedure_requires_a_complete_feedback_record(
+    static_config, engagement, name, description, reason, message
+):
+    with pytest.raises(RecomputeError, match=message):
+        add_auditor_procedure(
+            engagement, INVENTORY_RISK, name, description, reason, config=static_config
+        )
+
+    assert engagement.line_item("inventory").procedures
+    assert engagement.feedback == []
 
 
 def test_adding_a_procedure_the_catalogue_does_not_offer_raises(static_config, engagement):

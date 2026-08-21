@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.models.audit_objects import (
     AI_SUGGESTION_LABEL,
+    AUDITOR_ADDED_LABEL,
     Assertion,
     AssertionAssessment,
     EvidenceStrength,
@@ -112,6 +113,18 @@ def test_ai_suggestion_requires_approval():
     proc.approved = True
     assert proc.requires_approval is False
     assert "AUDITOR APPROVAL REQUIRED" in AI_SUGGESTION_LABEL
+
+
+def test_an_auditor_added_procedure_is_active_but_not_catalogue_methodology():
+    proc = _procedure(
+        procedure_id=None,
+        evidence_strength=None,
+        source=ProcedureSource.AUDITOR_ADDED,
+    )
+
+    assert proc.requires_approval is False
+    assert proc.evidence_strength is None
+    assert "NOT CATALOGUE METHODOLOGY" in AUDITOR_ADDED_LABEL
 
 
 # --- relationships and traceability --------------------------------------------------

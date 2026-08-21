@@ -414,6 +414,63 @@ def add_catalogue_procedure(
     )
 
 
+def add_auditor_procedure(
+    engagement: AuditEngagement,
+    risk_id: str,
+    name: str,
+    description: str,
+    reason: str,
+    *,
+    config: StaticConfig | None = None,
+) -> AuditorFeedback:
+    """Add auditor-designed work to one risk without changing methodology (SPEC 13, 18).
+
+    This is an active, approved response in *this* engagement, not a catalogue entry and not
+    an AI suggestion awaiting approval.  Its missing evidence-strength assessment is explicit;
+    the accompanying feedback record can later be analysed as a possible catalogue addition,
+    but neither this function nor that analysis writes a static JSON file.
+    """
+    config = config or get_config()
+    line_item, _ = _find_risk(engagement, risk_id)
+    name, description, reason = (value.strip() for value in (name, description, reason))
+    if not name:
+        raise RecomputeError("an auditor-added procedure needs a name")
+    if not description:
+        raise RecomputeError("an auditor-added procedure needs a description")
+    if not reason:
+        raise RecomputeError("an auditor-added procedure needs a reason")
+
+    procedure = Procedure(
+        id=engagement.next_id(PROCEDURE_ID_PREFIX),
+        risk_ids=[risk_id],
+        procedure_id=None,
+        name=name,
+        description=description,
+        procedure_type="auditor_added",
+        evidence_strength=None,
+        rationale=reason,
+        source=ProcedureSource.AUDITOR_ADDED,
+        approved=True,
+        isa_refs=list(config.isa_refs_for(LinkedObjectType.PROCEDURE)),
+    )
+    line_item.procedures.append(procedure)
+    return record_feedback(
+        engagement,
+        object_type="procedure",
+        object_id=procedure.id,
+        before={},
+        after={
+            "procedure_id": None,
+            "name": procedure.name,
+            "description": procedure.description,
+            "source": procedure.source.value,
+            "risk_ids": [risk_id],
+        },
+        reason=reason,
+        line_item=line_item,
+    )
+
+
 def remove_procedure(
     engagement: AuditEngagement, procedure_id: str, risk_id: str, reason: str
 ) -> AuditorFeedback:

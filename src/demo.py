@@ -99,7 +99,11 @@ def _area(item: FinancialLineItemAssessment) -> str:
         strength = (
             procedure.evidence_strength.value if procedure.evidence_strength else "unassessed"
         )
-        marker = "" if procedure.source is ProcedureSource.CATALOGUE else "   *** AI SUGGESTION "
+        marker = ""
+        if procedure.source is ProcedureSource.AI_SUGGESTION:
+            marker = "   *** AI SUGGESTION "
+        elif procedure.source is ProcedureSource.AUDITOR_ADDED:
+            marker = "   *** AUDITOR-ADDED (NOT CATALOGUE) "
         if procedure.requires_approval:
             marker += "— AUDITOR APPROVAL REQUIRED ***"
         lines.append(

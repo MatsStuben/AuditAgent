@@ -19,7 +19,7 @@ from src.llm.schemas import (
     EngagementSpecificFeedback,
     FeedbackClassificationOutput,
 )
-from src.models.audit_objects import Assertion, RiskLevel
+from src.models.audit_objects import Assertion, ProcedureSource, RiskLevel
 from tests.conftest import (
     INVENTORY_RISK,
     scripted_analysis,
@@ -208,6 +208,28 @@ def test_removing_a_procedure_records_the_auditors_own_reason(engagement, static
     record = at.session_state["engagement"].feedback[-1]
     assert record.object_id == procedure.id
     assert record.reason == "The ageing review already covers this."
+
+
+def test_adding_a_custom_procedure_goes_through_the_engine_and_records_feedback(
+    engagement, static_config
+):
+    at = app(engagement, static_config)
+
+    at.text_input(key=f"customname_{INVENTORY_RISK}").set_value("Inspect signed orders")
+    at.text_area(key=f"customdesc_{INVENTORY_RISK}").set_value(
+        "Inspect signed customer orders supporting the stock held at year end."
+    )
+    at.text_input(key=f"customreason_{INVENTORY_RISK}").set_value(
+        "The stock is contractually pre-sold."
+    )
+    at = next(b for b in at.button if b.label == "Add custom procedure").click().run()
+
+    added = at.session_state["engagement"].line_item("inventory").procedures[-1]
+    feedback = at.session_state["engagement"].feedback[-1]
+    assert added.source is ProcedureSource.AUDITOR_ADDED
+    assert added.procedure_id is None and added.evidence_strength is None
+    assert feedback.object_id == added.id
+    assert feedback.reason == "The stock is contractually pre-sold."
 
 
 def test_the_feedback_log_offers_analysis_only_where_it_applies(engagement, static_config):

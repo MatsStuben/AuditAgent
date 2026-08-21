@@ -38,10 +38,15 @@ class EvidenceStrength(StrEnum):
 class ProcedureSource(StrEnum):
     CATALOGUE = "catalogue"
     AI_SUGGESTION = "ai_suggestion"
+    AUDITOR_ADDED = "auditor_added"
 
 
 #: Displayed against any procedure the LLM invented rather than chose (SPEC 13).
 AI_SUGGESTION_LABEL = "AI SUGGESTION — AUDITOR APPROVAL REQUIRED"
+
+#: Displayed against an engagement-specific procedure entered by an auditor.  It is active
+#: audit work, but it is not silently represented as approved catalogue methodology.
+AUDITOR_ADDED_LABEL = "AUDITOR-ADDED — NOT CATALOGUE METHODOLOGY"
 
 
 class Procedure(BaseModel):
@@ -59,17 +64,17 @@ class Procedure(BaseModel):
     """The risks this procedure responds to. Never empty: a procedure answering nothing
     would break the SPEC 14 traceability chain."""
     procedure_id: str | None = None
-    """Catalogue entry id. None for an AI suggestion, which has no catalogue entry."""
+    """Catalogue entry id. None for an AI suggestion or auditor-added procedure."""
     name: str
     description: str
     procedure_type: str
     """Free-form by design: the catalogue must stay data-driven (SPEC 12)."""
     evidence_strength: EvidenceStrength | None = None
-    """None for an AI suggestion, which has no assessed strength.
+    """None for an AI suggestion or auditor-added procedure, which have no assessed strength.
 
     Evidence strength is approved methodology carried by the catalogue, not something to ask
-    the model for — an unapproved suggestion has simply not been assessed, and inventing a
-    value would misrepresent it as vetted.
+    the model for — an unapproved suggestion or engagement-specific auditor addition has
+    simply not been assessed, and inventing a value would misrepresent it as vetted.
     """
     rationale: str
     source: ProcedureSource = ProcedureSource.CATALOGUE

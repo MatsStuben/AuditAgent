@@ -28,6 +28,7 @@ from src.engine.coverage import check_isa_coverage
 from src.engine.pipeline import load_engagement, run_pipeline
 from src.engine.recompute import (
     RecomputeError,
+    add_auditor_procedure,
     add_catalogue_procedure,
     approve_procedure,
     override_assertion_relevance,
@@ -39,7 +40,12 @@ from src.engine.recompute import (
 from src.engine.traceability import TraceabilityError, trace_procedure
 from src.llm.client import AnthropicLLMClient, LLMError
 from src.llm.feedback_generalizer import generalize_feedback, is_analysable
-from src.models.audit_objects import AI_SUGGESTION_LABEL, ProcedureSource, RiskLevel
+from src.models.audit_objects import (
+    AI_SUGGESTION_LABEL,
+    AUDITOR_ADDED_LABEL,
+    ProcedureSource,
+    RiskLevel,
+)
 from src.models.engagement import AuditEngagement, CompanyFact
 from src.models.feedback import FeedbackAnalysisOutcome
 
@@ -334,6 +340,8 @@ def render_procedures(area, risk, assertion_of: str) -> None:
 
         if procedure.source is ProcedureSource.AI_SUGGESTION:
             st.caption(f"⚠️ {AI_SUGGESTION_LABEL}")
+        elif procedure.source is ProcedureSource.AUDITOR_ADDED:
+            st.caption(f"⚠️ {AUDITOR_ADDED_LABEL}")
 
         # Both actions write a feedback record, and procedure feedback is the clearest input
         # SPEC 19 has to learn from — "removed by the auditor" gives the generalizer no
@@ -365,10 +373,12 @@ def render_procedures(area, risk, assertion_of: str) -> None:
 
 
 def render_add_procedure(area, risk, assertion_of: str) -> None:
-    """Additions come from the filtered catalogue, never free text (SPEC 12).
+    """Offer both approved catalogue work and explicit engagement-specific work.
 
     `filter_catalogue` decides what is eligible — the same constraint the model is held to —
-    so the picker cannot record a link approved methodology does not support.
+    so the catalogue picker cannot record a link approved methodology does not support. A
+    free-text addition is clearly marked as non-catalogue and becomes feedback rather than a
+    silent methodology change.
     """
     assertion = next(a for a in area.assertions if a.id == assertion_of)
     eligible = filter_catalogue(
@@ -376,26 +386,46 @@ def render_add_procedure(area, risk, assertion_of: str) -> None:
     )
     already = {p.procedure_id for p in area.procedures_for(risk.id)}
     options = [entry for entry in eligible if entry.id not in already]
-    if not options:
-        return
+    if options:
+        with st.form(f"add_{risk.id}"):
+            choice = st.selectbox(
+                "Add a catalogue procedure",
+                options,
+                format_func=lambda e: f"{e.id} — {e.name} ({e.evidence_strength.value})",
+                key=f"pick_{risk.id}",
+            )
+            reason = st.text_input("Reason", key=f"addreason_{risk.id}")
+            if st.form_submit_button("Add"):
+                act(
+                    add_catalogue_procedure,
+                    engagement(),
+                    risk.id,
+                    choice.id,
+                    reason or "Added by the auditor.",
+                    config(),
+                    success=f"{choice.id} added to {risk.id}.",
+                )
 
-    with st.form(f"add_{risk.id}"):
-        choice = st.selectbox(
-            "Add a catalogue procedure",
-            options,
-            format_func=lambda e: f"{e.id} — {e.name} ({e.evidence_strength.value})",
-            key=f"pick_{risk.id}",
+    with st.form(f"addcustom_{risk.id}"):
+        st.caption(
+            "Add engagement-specific work. It is active in this plan but remains unassessed "
+            "methodology and can be analysed from the feedback log."
         )
-        reason = st.text_input("Reason", key=f"addreason_{risk.id}")
-        if st.form_submit_button("Add"):
+        name = st.text_input("Custom procedure name", key=f"customname_{risk.id}")
+        description = st.text_area(
+            "Custom procedure description", key=f"customdesc_{risk.id}"
+        )
+        reason = st.text_input("Why add it?", key=f"customreason_{risk.id}")
+        if st.form_submit_button("Add custom procedure"):
             act(
-                add_catalogue_procedure,
+                add_auditor_procedure,
                 engagement(),
                 risk.id,
-                choice.id,
-                reason or "Added by the auditor.",
-                config(),
-                success=f"{choice.id} added to {risk.id}.",
+                name,
+                description,
+                reason,
+                config=config(),
+                success=f"Custom procedure added to {risk.id}.",
             )
 
 

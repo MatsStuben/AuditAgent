@@ -419,7 +419,7 @@ Contains:
 - evidence strength,
 - `risk_ids`: the risk(s) addressed — always at least one,
 - rationale,
-- source: approved catalogue / AI suggestion,
+- source: approved catalogue / AI suggestion / auditor-added engagement procedure,
 - ISA traceability.
 
 Procedures are held on the audit area, not nested under a single risk, and the
@@ -858,11 +858,24 @@ The model may additionally return non-catalogue suggestions:
 }
 ```
 
-Any non-catalogue procedure must be clearly marked and requires approval before use:
+An LLM-generated non-catalogue suggestion must be clearly marked and requires approval before
+use:
 
 ```text
 AI SUGGESTION — AUDITOR APPROVAL REQUIRED
 ```
+
+An auditor may also add a free-text procedure directly to an engagement. It is active work in
+that engagement because the auditor has deliberately added it, but it must be clearly marked:
+
+```text
+AUDITOR-ADDED — NOT CATALOGUE METHODOLOGY
+```
+
+It has no catalogue ID or assessed evidence strength. The auditor must provide its name,
+description and reason; that reason is recorded as procedure feedback and may be analysed under
+Section 19 as a candidate catalogue rule. Neither adding it nor analysing that feedback changes
+the static catalogue.
 
 Procedure selection should respond to the reason and severity of the risk.
 
@@ -967,6 +980,10 @@ An unapproved AI suggestion does not close an ISA 330.6/7 gap. Section 13 says a
 without auditor approval, so treating one as a response would report a risk as answered by work that is not yet
 part of the plan. The suggestion is still listed among the objects addressing the requirement, so the panel can
 show that a proposed response exists and is waiting on a decision.
+
+An auditor-added engagement procedure does count as a response: the auditor has already placed it
+in the plan. Its non-catalogue status is shown separately; it must not be mistaken for approved
+methodology.
 
 This is not intended to prove full ISA compliance.
 

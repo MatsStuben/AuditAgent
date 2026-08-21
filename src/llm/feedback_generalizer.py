@@ -31,7 +31,12 @@ import logging
 from src.llm.client import LLMClient, LLMTask
 from src.llm.prompts import GENERALIZE_FEEDBACK
 from src.llm.schemas import FeedbackClassificationOutput, MethodologyRuleProposalOutput
-from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
+from src.models.audit_objects import (
+    AssertionAssessment,
+    Procedure,
+    ProcedureSource,
+    RiskAssessment,
+)
 from src.models.engagement import AuditEngagement, FinancialLineItemAssessment
 from src.models.feedback import (
     AuditorFeedback,
@@ -109,9 +114,14 @@ def _describe_assertion(
 
 
 def _describe_procedure(area: FinancialLineItemAssessment, procedure: Procedure) -> str:
+    origin = procedure.procedure_id or (
+        "auditor-added procedure"
+        if procedure.source is ProcedureSource.AUDITOR_ADDED
+        else "AI suggestion"
+    )
     return (
         f"Audit area: {area.line_item_type}\n"
-        f"Procedure: {procedure.name} ({procedure.procedure_id or 'AI suggestion'})\n"
+        f"Procedure: {procedure.name} ({origin})\n"
         f"Responds to: {', '.join(procedure.risk_ids)}\n"
         f"Why it was selected: {procedure.rationale}"
     )
