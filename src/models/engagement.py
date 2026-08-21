@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from src.models.audit_objects import AssertionAssessment
+from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
 
 
 class CompanyFact(BaseModel):
@@ -65,6 +65,35 @@ class FinancialLineItemAssessment(BaseModel):
     material: bool | None = None
     is_audit_area: bool = False
     assertions: list[AssertionAssessment] = Field(default_factory=list)
+    procedures: list[Procedure] = Field(default_factory=list)
+    """Procedures for this area, each naming the risks it addresses.
+
+    Held here rather than under individual risks because procedure selection is an
+    area-level operation (SPEC 6.1, 13) and one procedure may answer several risks. This is
+    the single source of truth — a procedure exists once, however many risks it covers.
+    """
+
+    @property
+    def all_risks(self) -> list[RiskAssessment]:
+        """Every risk in this area, across all its assertions."""
+        return [risk for assertion in self.assertions for risk in assertion.risks]
+
+    def risk(self, risk_id: str) -> RiskAssessment | None:
+        return next((r for r in self.all_risks if r.id == risk_id), None)
+
+    def procedures_for(self, risk_id: str) -> list[Procedure]:
+        """The procedures responding to one risk (SPEC 14, 15)."""
+        return [p for p in self.procedures if risk_id in p.risk_ids]
+
+    def dangling_risk_ids(self) -> set[str]:
+        """Procedure references that no longer resolve to a risk in this area.
+
+        Re-analysing an area replaces its assertions and risks (SPEC 17), so stale
+        procedures must be cleared with it. This surfaces the failure rather than letting a
+        procedure silently point at nothing.
+        """
+        known = {risk.id for risk in self.all_risks}
+        return {rid for p in self.procedures for rid in p.risk_ids if rid not in known}
 
 
 class AuditEngagement(BaseModel):

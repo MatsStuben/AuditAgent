@@ -60,8 +60,8 @@ audit-engine/
 │   │   ├── schemas.py           # Pydantic output models for every LLM call
 │   │   ├── prompts.py           # all system/user prompt text, no domain logic
 │   │   ├── context_extractor.py
-│   │   ├── assertion_assessor.py
-│   │   ├── risk_assessor.py
+│   │   ├── formatting.py        # shared prompt fragments
+│   │   ├── audit_area_analyser.py  # relevance + risks, 1 call per area
 │   │   ├── procedure_selector.py
 │   │   └── feedback_generalizer.py
 │   ├── data/
@@ -83,9 +83,11 @@ audit-engine/
    `audit_area_profiles.json` has an entry for it — that is what makes it an *audit area*. This expresses
    "only cash and inventory continue" without a single `if item == "cash"` anywhere (SPEC §9), and adding a
    third audit area is a JSON edit. `material` and `is_audit_area` are independent flags.
-2. **One LLM call per bounded judgement.** One call per material audit area for assertion relevance (returns
-   the full candidate list with a relevance verdict each); one per relevant assertion for risk; one per risk
-   for procedures. Never one prompt for the whole audit (SPEC §21).
+2. **The audit area is the bounded unit of LLM reasoning (SPEC §6.1).** Exactly two calls per material audit
+   area — one to analyse it (relevance + risks + likelihood/magnitude), one to select procedures for all its
+   risks — plus one fact extraction per engagement. Calls scale with audit areas, not with assertions or
+   risks: 5 calls for a cash + inventory run. Never one prompt for the whole audit, and never a prompt
+   spanning two areas (SPEC §21).
 3. **LLM services take an injected client.** Each service function signature ends with `client: LLMClient`
    (a `Protocol` with a single `parse(...)` method). Production passes the SDK wrapper; tests pass a scripted
    fake. This is what makes every LLM step independently testable without network.
@@ -221,68 +223,90 @@ a context edit replaces the previous set. Live behaviour is checked in M12.
 
 ---
 
-### M5 — Assertion relevance
+### M5 — Deterministic risk matrix
 
-**Adds:** `assess_assertions()` — candidate assertions from the profile → per-assertion relevance verdict with
-rationale, supporting fact IDs, and ISA 315.29 linkage (SPEC §10).
+**Adds:** `derive_rating(likelihood, magnitude)` — the likelihood × magnitude → rating mapping (SPEC §11).
+Pure and config-driven; no LLM.
 
-**Files:** `src/llm/assertion_assessor.py`, prompt in `prompts.py`, `AssertionRelevanceOutput` in `schemas.py`.
+**Files:** `src/engine/risk_matrix.py`.
 
-The model receives only the bounded context SPEC §10 lists (line item type, amount, materiality, derived metrics,
-raw context, facts, candidate assertions) — not the whole engagement. Returned assertions not in the candidate
-list are rejected; missing candidates default to `relevant=False` with a "no verdict returned" rationale rather
-than silently vanishing.
+Sits before the analysis milestone because the analysis step derives ratings inside itself. The matrix lives in
+`risk_matrix.json`, so changing risk appetite never touches code.
 
-**Verify:** `tests/test_assertion_assessor.py` — fake returns verdicts for inventory's five candidates →
-five `AssertionAssessment` objects, each with an ID, `line_item_id`, `isa_refs=["ISA315.29"]`, rationale, and
-validated fact IDs; an unknown assertion in the model output is dropped; an unknown fact ID is dropped.
+**Verify:** `tests/test_risk_matrix.py` — all 9 combinations map as configured; `high`/`high → high`,
+`low`/`low → low`, `low`/`high → medium`; an unknown level raises rather than defaulting; **injecting an
+inverted matrix flips every rating**, which is what proves the rating is configuration rather than constants.
 
-**Depends on:** M2, M4.
+**Depends on:** M1.
 
 ---
 
-### M6 — Risk assessment
+### M6 — Audit area analysis (assertion relevance + risks, one call)
 
-**Adds:** `assess_risks()` — up to two risks per relevant assertion, plus deterministic rating derivation
-(SPEC §11).
+**Adds:** `analyse_audit_area()` — **one** LLM call per audit area returning relevance verdicts for every
+candidate assertion *and* the risks nested under each relevant one, plus deterministic rating derivation
+(SPEC §6.1, §10, §11).
 
-**Files:** `src/engine/risk_matrix.py` (`derive_rating(likelihood, magnitude)` — pure, config-driven),
-`src/llm/risk_assessor.py`, prompt, `RiskAssessmentOutput` in `schemas.py`.
+**Files:** `src/llm/audit_area_analyser.py`, `ANALYSE_AUDIT_AREA` prompt in `prompts.py`,
+`AuditAreaAnalysisOutput` in `schemas.py`, `src/llm/formatting.py` for the shared prompt fragments.
 
-`RiskAssessmentOutput` deliberately has **no** `risk_rating` field — the model returns `likelihood` and
-`magnitude` only. `system_rating = derive_rating(...)`, and `final_rating` is initialised to the same value
-with `is_overridden=False`. Nothing downstream ever reads `system_rating` (SPEC §11).
+The model receives only the bounded context SPEC §10 lists for **one** audit area — never the whole engagement,
+never a second area. Post-processing is where the guarantees live:
 
-**Verify:** `tests/test_risk_matrix.py` (pure, no LLM) — all 9 combinations map as configured;
-`high`/`high → high`, `low`/`low → low`, `low`/`high → medium`; an unknown level raises rather than defaulting;
-swapping in a synthetic matrix changes the result with no code change (proves it is config, not constants).
-`tests/test_risk_assessor.py` — fake output produces a `RiskAssessment` whose `system_rating` matches the
-matrix rather than anything the model said, `system_rating == final_rating`, `is_overridden is False`,
-`assertion_id` set, `isa_refs` containing `ISA315.28b_31`; two returned risks produce two objects; irrelevant
-assertions are skipped without a call to the model.
+- verdicts outside the candidate list are discarded; missing candidates default to `relevant=False` with an
+  explicit "no verdict" rationale, so M10 can tell a considered rejection from an unexamined assertion;
+- risks attached to a non-relevant assertion are discarded (SPEC §10);
+- risks are capped at two per assertion — `maxItems` is not API-enforced, so this is applied in code;
+- `system_rating = derive_rating(...)` from M5; `final_rating` starts equal, `is_overridden=False`;
+- `supporting_fact_ids` are validated against the engagement's facts and dangling ones dropped.
 
-**Depends on:** M5.
+**Verify:** `tests/test_audit_area_analyser.py` — five candidates produce five `AssertionAssessment` objects
+with IDs, `line_item_id`, `isa_refs=["ISA315.29"]`; nested risks carry `assertion_id` and
+`isa_refs=["ISA315.28b_31"]`; **exactly one call for the whole area** whatever the assertion/risk count;
+`system_rating` follows an injected matrix rather than anything the model said; risks on a non-relevant
+assertion are dropped; unknown assertions, unknown fact IDs and blank descriptions are rejected; immaterial or
+non-audit-area line items make no call.
+
+**Depends on:** M2, M4, M5.
 
 ---
 
-### M7 — Procedure catalogue filtering and selection
+### M7 — Procedure catalogue filtering and per-area selection
 
-**Adds:** deterministic catalogue filtering plus `select_procedures()` (SPEC §12, §13).
+**Adds:** deterministic catalogue filtering plus `select_procedures()` — **one** LLM call per audit area
+covering every risk in that area (SPEC §6.1, §12, §13).
 
 **Files:** `src/engine/catalogue.py` (`filter_catalogue(audit_area, assertion)` — pure, no LLM),
-`src/llm/procedure_selector.py`, prompt, `ProcedureSelectionOutput` in `schemas.py`.
+`src/llm/procedure_selector.py`, `SELECT_PROCEDURES` prompt, `ProcedureSelectionOutput` in `schemas.py`.
 
-The LLM only ever sees the filtered subset, so it cannot select a procedure that is wrong for the
-audit area/assertion. A returned `procedure_id` outside that subset is rejected. An optional
-`suggested_new_procedure` becomes a `Procedure` with `source="ai_suggestion"`, `approved=False`, and the
+The call receives every assessed risk in the area — each with its **risk ID**, assertion, description and
+**`final_rating`** — plus the catalogue subset for that area. Using `final_rating` is what lets a risk-rating
+override be answered by re-running this call alone (SPEC §17).
+
+Each returned procedure names the `risk_ids` it addresses, and becomes **one** runtime `Procedure` carrying
+that list — never one copy per risk. Procedures are attached to `FinancialLineItemAssessment.procedures`;
+`procedures_for(risk_id)` resolves the relationship in the other direction for traceability and coverage.
+
+Rejected rather than stored: a `procedure_id` outside the area's catalogue subset, a `risk_id` that is not one
+of the area's risks, and a procedure left with no valid risk IDs at all (`Procedure.risk_ids` has
+`min_length=1`, so an empty one cannot be constructed). Unknown risk IDs are dropped from an otherwise-valid
+procedure; the procedure is discarded only if that empties the list.
+
+`suggested_new_procedures` become `Procedure` objects with `source="ai_suggestion"`, `approved=False` and the
 `AI SUGGESTION — AUDITOR APPROVAL REQUIRED` label (SPEC §13).
+
+**Re-selection clears first.** Attaching must replace the area's procedures wholesale, never append, or a
+rerun would leave procedures pointing at risks from the previous run. `dangling_risk_ids()` asserts this in
+tests.
 
 **Verify:** `tests/test_catalogue.py` (pure) — `("inventory", "valuation")` returns exactly
 `INV_AGED_STOCK_REVIEW` and `INV_SUBSEQUENT_SALES`; `("cash", "valuation")` returns `[]`; filtering is
-data-driven (test passes a synthetic catalogue and gets the right subset with zero code change).
-`tests/test_procedure_selector.py` — fake selection creates `Procedure` objects with `risk_id`,
-`isa_refs=["ISA330.6_7"]`, `source="catalogue"`; an out-of-subset ID is rejected; an AI suggestion is flagged
-unapproved.
+data-driven (a synthetic catalogue yields the right subset with zero code change).
+`tests/test_procedure_selector.py` — **exactly one call per area** whatever the risk count; a procedure naming
+two `risk_ids` produces **one** `Procedure` reachable from both risks via `procedures_for`; each has
+`isa_refs=["ISA330.6_7"]` and `source="catalogue"`; out-of-subset procedure IDs and unknown risk IDs are
+rejected; an AI suggestion is flagged unapproved; re-selection replaces rather than appends and leaves
+`dangling_risk_ids()` empty; the prompt carries `final_rating`, not `system_rating`.
 
 **Depends on:** M6.
 
@@ -300,8 +324,10 @@ unapproved.
 - The resulting object graph is fully linked: every `Procedure.risk_id` resolves to a risk, every
   `RiskAssessment.assertion_id` to an assertion, every assertion to a line item.
 - Irrelevant assertions produce no risks; every relevant assertion produces at least one.
-- The fake records call counts, proving one call per audit area / per relevant assertion / per risk — i.e. no
-  giant single prompt.
+- **The fake records exactly 5 calls** for the Raiatea run: 1 fact extraction + 2 area analyses + 2 procedure
+  selections. This is the SPEC §6.1 budget, and the test is what stops it regressing toward per-assertion or
+  per-risk calls as prompts are tuned.
+- No call's user message mentions more than one audit area.
 
 This test's fixture becomes the shared engagement fixture for M9–M11.
 
@@ -313,13 +339,16 @@ This test's fixture becomes the shared engagement fixture for M9–M11.
 
 **Adds:** the explicit forward chain of SPEC §14.
 
-**Files:** `src/engine/traceability.py` — `trace_procedure(procedure, engagement)` returning a structured
-`TraceChain` (procedure → risk → assertion → line item → supporting facts + metrics → ISA requirement IDs).
+**Files:** `src/engine/traceability.py` — `trace_procedure(procedure, engagement)` returning **one
+`TraceChain` per entry in `procedure.risk_ids`** (procedure → risk → assertion → line item → supporting facts
++ metrics → ISA requirement IDs). A procedure addressing several risks fans out into several complete chains;
+that is a property of the audit, not a gap (SPEC §14).
 
 **Verify:** `tests/test_traceability.py` on the M8 fixture — tracing the inventory subsequent-sales procedure
 yields the valuation assertion, the inventory line item, the seasonality fact, and the ISA chain
-`ISA315.29 → ISA315.28b_31 → ISA330.6_7`. A procedure whose `risk_id` is dangling raises rather than returning
-a partial chain. Deterministic, no LLM.
+`ISA315.29 → ISA315.28b_31 → ISA330.6_7`. A procedure naming two risks yields two chains, each complete and
+differing only from the risk upward. A dangling `risk_id` raises rather than returning a partial chain.
+Deterministic, no LLM.
 
 **Depends on:** M8.
 
@@ -333,14 +362,15 @@ a partial chain. Deterministic, no LLM.
 
 Rules, evaluated **only over audit areas** (SPEC §15 Coverage scope): material audit areas have assertion
 assessments (ISA315.29); relevant assertions have risk assessments (ISA315.28b_31); risks have at least one
-procedure (ISA330.6_7). Returns, per requirement, the list of addressing object IDs plus any gaps, and
-separately a list of material non-audit-area line items labelled
-`material — audit logic not implemented in MVP`.
+procedure — resolved via `procedures_for(risk.id)`, since procedures live on the area (ISA330.6_7). Returns,
+per requirement, the list of addressing object IDs plus any gaps, and separately a list of material
+non-audit-area line items labelled `material — audit logic not implemented in MVP`.
 
 **Verify:** `tests/test_coverage.py` — the M8 fixture reports **zero** gaps; the six non-audit-area line items
 appear in the "not implemented" list and **not** as ISA315.29 gaps (this is the test that encodes the
-decision — without it the panel would show six false gaps and bury the real one); deleting a risk's procedures
-produces exactly one `ISA330.6_7` gap naming that risk ID and leaves the other two requirements clean.
+decision — without it the panel would show six false gaps and bury the real one); removing a risk ID from the
+procedures that cover it produces exactly one `ISA330.6_7` gap naming that risk and leaves the other two
+requirements clean, **including for the other risks the same procedure still covers**.
 
 **Depends on:** M8, M9.
 
@@ -356,13 +386,19 @@ a one-shot generator.
 Explicit functions, one per override type, each recording an `AuditorFeedback` (`object_type`, `object_id`,
 `before`, `after`, `reason`) before mutating, and each recomputing only its own subtree:
 
-| Override | Recomputes |
-| --- | --- |
-| `override_risk_rating` | that risk's procedures, then coverage |
-| `override_assertion_relevance` | true→false drops that assertion's risks/procedures; false→true generates them |
-| `override_procedures` (add/remove/approve) | coverage only |
-| `update_company_context` | re-extract facts, rerun cash + inventory pipeline |
-| `update_financials` | materiality → scoping → full pipeline rerun |
+Recompute granularity follows the call structure (SPEC §17): the unit is the audit area, not the risk.
+
+| Override | Recomputes | LLM calls |
+| --- | --- | --- |
+| `override_risk_rating` | procedure selection for that **area**, then coverage. Never re-analyses: `likelihood`, `magnitude` and `system_rating` are the original conclusion and must survive | 1 |
+| `override_assertion_relevance` → not relevant | drops that assertion's risks and their procedures, then coverage | 0 |
+| `override_assertion_relevance` → relevant | re-analyses that area, then reselects its procedures. **Replaces every assertion and risk in the area**, discarding overrides held on them — the UI must warn first | 2 |
+| `override_procedures` (add/remove/approve) | coverage only. "Remove" means detaching one `risk_id`; the procedure survives if it still covers others, and is dropped only when its last reference goes | 0 |
+| `update_company_context` | re-extract facts, then both calls for every audit area | 1 + 2n |
+| `update_financials` | materiality → scoping → both calls for any area entering or leaving scope | ≤ 2n |
+
+The risk-rating row is the one that matters most: it is the common override, it is Scenario D, and routing it
+around re-analysis is what keeps the original system output intact.
 
 **Verify:** `tests/test_recompute.py` — this is SPEC §22 Scenario D as a test:
 - Override inventory valuation risk high → low: `system_rating` still `"high"`, `final_rating` `"low"`,
@@ -571,7 +607,8 @@ streamlit run src/ui/app.py
 ```
 
 The MVP is done when the SPEC §25 checklist passes: Raiatea loads, materiality is £262k, cash and inventory
-traverse one generic pipeline, context change moves risk (M13 Scenario C), risk level moves procedure choice,
+traverse one generic pipeline, context change moves risk (M13a Scenario C), risk level moves procedure choice
+independently of context (M13b),
 procedures trace back to ISA requirements and forward from them, overrides preserve system output and
 recompute only downstream, and one override becomes a pending `RuleProposal`.
 

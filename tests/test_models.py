@@ -26,7 +26,7 @@ from src.models.feedback import AuditorFeedback, RuleProposal, RuleProposalStatu
 def _procedure(**overrides) -> Procedure:
     defaults = dict(
         id="proc_1",
-        risk_id="risk_1",
+        risk_ids=["risk_1"],
         procedure_id="INV_SUBSEQUENT_SALES",
         name="Test post-year-end sales",
         description="...",
@@ -117,10 +117,7 @@ def test_ai_suggestion_requires_approval():
 # --- relationships and traceability --------------------------------------------------
 
 
-def test_object_graph_links_by_id():
-    """SPEC 14: relationships are explicit IDs, not inferred from free text."""
-    proc = _procedure()
-    risk = _risk(procedures=[proc])
+def _inventory_area(*, risks=(), procedures=()) -> FinancialLineItemAssessment:
     assertion = AssertionAssessment(
         id="assertion_1",
         line_item_id="li_inventory",
@@ -129,20 +126,87 @@ def test_object_graph_links_by_id():
         rationale="Seasonal inventory creates obsolescence risk.",
         supporting_fact_ids=["fact_1"],
         isa_refs=["ISA315.29"],
-        risks=[risk],
+        risks=list(risks),
     )
-    item = FinancialLineItemAssessment(
+    return FinancialLineItemAssessment(
         id="li_inventory", line_item_type="inventory", cy=8_900_000, py=6_200_000,
-        material=True, is_audit_area=True, assertions=[assertion],
+        material=True, is_audit_area=True, assertions=[assertion], procedures=list(procedures),
     )
 
-    assert proc.risk_id == risk.id
+
+def test_object_graph_links_by_id():
+    """SPEC 14: relationships are explicit IDs, not inferred from free text."""
+    proc = _procedure()
+    risk = _risk()
+    item = _inventory_area(risks=[risk], procedures=[proc])
+    assertion = item.assertions[0]
+
+    assert proc.risk_ids == [risk.id]
     assert risk.assertion_id == assertion.id
     assert assertion.line_item_id == item.id
     # Full ISA chain reachable from the procedure upwards.
     assert proc.isa_refs == ["ISA330.6_7"]
     assert risk.isa_refs == ["ISA315.28b_31"]
     assert assertion.isa_refs == ["ISA315.29"]
+
+
+# --- procedure/risk relationships ----------------------------------------------------
+
+
+def test_one_procedure_can_address_several_risks_without_duplication():
+    """SPEC 4/13: the relationship is explicit, not modelled by copying the procedure."""
+    shrinkage = _risk(id="risk_1")
+    receipting = _risk(id="risk_2")
+    count = _procedure(id="proc_1", risk_ids=["risk_1", "risk_2"])
+    item = _inventory_area(risks=[shrinkage, receipting], procedures=[count])
+
+    # One object, reachable from both risks.
+    assert len(item.procedures) == 1
+    assert item.procedures_for("risk_1") == [count]
+    assert item.procedures_for("risk_2") == [count]
+    assert item.procedures_for("risk_1")[0] is item.procedures_for("risk_2")[0]
+
+
+def test_procedures_for_returns_nothing_for_an_uncovered_risk():
+    item = _inventory_area(
+        risks=[_risk(id="risk_1"), _risk(id="risk_2")],
+        procedures=[_procedure(risk_ids=["risk_1"])],
+    )
+
+    assert item.procedures_for("risk_2") == []
+
+
+def test_procedure_must_address_at_least_one_risk():
+    """A procedure answering nothing would break the SPEC 14 chain."""
+    with pytest.raises(ValidationError):
+        _procedure(risk_ids=[])
+
+
+def test_all_risks_flattens_across_assertions():
+    item = _inventory_area(risks=[_risk(id="risk_1"), _risk(id="risk_2")])
+
+    assert [r.id for r in item.all_risks] == ["risk_1", "risk_2"]
+    assert item.risk("risk_2").id == "risk_2"
+    assert item.risk("risk_99") is None
+
+
+def test_dangling_risk_ids_are_detectable():
+    """Re-analysing an area replaces its risks, so stale procedures must be visible."""
+    item = _inventory_area(
+        risks=[_risk(id="risk_1")],
+        procedures=[_procedure(risk_ids=["risk_1", "risk_stale"])],
+    )
+
+    assert item.dangling_risk_ids() == {"risk_stale"}
+
+
+def test_no_dangling_ids_when_procedures_match_risks():
+    item = _inventory_area(
+        risks=[_risk(id="risk_1"), _risk(id="risk_2")],
+        procedures=[_procedure(risk_ids=["risk_1", "risk_2"])],
+    )
+
+    assert item.dangling_risk_ids() == set()
 
 
 def _engagement(*items: FinancialLineItemAssessment) -> AuditEngagement:

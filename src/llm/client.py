@@ -23,11 +23,14 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class LLMTask(StrEnum):
-    """The five bounded judgements delegated to the model (SPEC 21)."""
+    """The four bounded judgements delegated to the model (SPEC 21).
+
+    `ANALYSE_AUDIT_AREA` and `SELECT_PROCEDURES` each run once per audit area, so total calls
+    scale with audit areas rather than with assertions and risks (SPEC 6.1).
+    """
 
     EXTRACT_COMPANY_FACTS = "extract_company_facts"
-    ASSESS_ASSERTIONS = "assess_assertions"
-    ASSESS_RISKS = "assess_risks"
+    ANALYSE_AUDIT_AREA = "analyse_audit_area"
     SELECT_PROCEDURES = "select_procedures"
     GENERALIZE_FEEDBACK = "generalize_feedback"
 
@@ -42,12 +45,15 @@ DEFAULT_MODEL = "claude-opus-5"
 
 #: Per-task model configuration. Effort is matched to how much judgement the task needs
 #: rather than applied uniformly (SPEC 21: "not every task requires maximum reasoning
-#: effort"). Extraction is near-mechanical; risk assessment is the core judgement.
+#: effort"). Extraction is near-mechanical; analysing an audit area is the core judgement.
+#:
+#: Token budgets reflect batching: one analysis response covers every assertion and risk for
+#: an area, and one selection response covers every risk, so both need far more room than the
+#: per-assertion calls they replaced.
 TASK_CONFIG: dict[LLMTask, TaskConfig] = {
     LLMTask.EXTRACT_COMPANY_FACTS: TaskConfig(model=DEFAULT_MODEL, max_tokens=2_000, effort="low"),
-    LLMTask.ASSESS_ASSERTIONS: TaskConfig(model=DEFAULT_MODEL, max_tokens=4_000, effort="medium"),
-    LLMTask.ASSESS_RISKS: TaskConfig(model=DEFAULT_MODEL, max_tokens=4_000, effort="high"),
-    LLMTask.SELECT_PROCEDURES: TaskConfig(model=DEFAULT_MODEL, max_tokens=3_000, effort="medium"),
+    LLMTask.ANALYSE_AUDIT_AREA: TaskConfig(model=DEFAULT_MODEL, max_tokens=16_000, effort="high"),
+    LLMTask.SELECT_PROCEDURES: TaskConfig(model=DEFAULT_MODEL, max_tokens=8_000, effort="medium"),
     LLMTask.GENERALIZE_FEEDBACK: TaskConfig(model=DEFAULT_MODEL, max_tokens=2_000, effort="medium"),
 }
 

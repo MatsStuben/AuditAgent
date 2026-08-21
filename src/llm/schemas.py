@@ -39,7 +39,26 @@ class CompanyFactsOutput(BaseModel):
 # --- assess_assertions ---------------------------------------------------------------
 
 
-class AssertionVerdict(BaseModel):
+class IdentifiedRiskOutput(BaseModel):
+    """One risk of material misstatement, nested under the assertion it affects (SPEC 11).
+
+    Deliberately has **no** rating field. The rating is derived from likelihood x magnitude
+    via `risk_matrix.json`, so the model cannot supply one and an incoherent low/low -> high
+    is structurally impossible.
+    """
+
+    description: str = Field(
+        description="What could actually go wrong, specific enough to design a procedure against."
+    )
+    likelihood: RiskLevel
+    magnitude: RiskLevel
+    rationale: str
+    supporting_fact_ids: list[str] = Field(default_factory=list)
+
+
+class AssertionAnalysisOutput(BaseModel):
+    """A relevance verdict plus the risks that follow from it (SPEC 10)."""
+
     assertion: Assertion
     relevant: bool
     rationale: str
@@ -47,42 +66,29 @@ class AssertionVerdict(BaseModel):
         default_factory=list,
         description="IDs of company facts supporting this verdict. Omit if none apply.",
     )
+    risks: list[IdentifiedRiskOutput] = Field(
+        default_factory=list,
+        description=(
+            "The most significant risk for this assertion, and a second only if genuinely "
+            "distinct — never more than two. Empty when the assertion is not relevant."
+        ),
+    )
 
 
-class AssertionRelevanceOutput(BaseModel):
-    """A verdict for each candidate assertion supplied in the prompt (SPEC 10)."""
+class AuditAreaAnalysisOutput(BaseModel):
+    """One response covering a whole audit area (SPEC 6.1).
 
-    assertions: list[AssertionVerdict]
+    Relevance and risks arrive together so the number of LLM calls scales with audit areas
+    rather than with assertions and risks.
 
-
-# --- assess_risks --------------------------------------------------------------------
-
-
-class RiskAssessmentOutput(BaseModel):
-    """One assertion-level risk (SPEC 11).
-
-    Deliberately has **no** `risk_rating` field. The rating is derived from
-    likelihood x magnitude via `risk_matrix.json`, so the model cannot supply one and an
-    incoherent low/low -> high is structurally impossible.
+    Neither the two-risk cap nor the "no risks when not relevant" rule is enforceable in the
+    schema — `maxItems` is not API-enforced and cross-field rules cannot be expressed — so
+    both are applied in `audit_area_analyser`.
     """
 
-    risk_description: str
-    likelihood: RiskLevel
-    magnitude: RiskLevel
-    rationale: str
-    supporting_fact_ids: list[str] = Field(default_factory=list)
-
-
-class RiskIdentificationOutput(BaseModel):
-    risks: list[RiskAssessmentOutput] = Field(
-        description=(
-            "The single most significant risk for this assertion. Include a second only if "
-            "it is genuinely distinct. Never more than two."
-        )
+    assertions: list[AssertionAnalysisOutput] = Field(
+        description="A verdict for every candidate assertion supplied, in any order."
     )
-    """The two-risk cap is a prompt-level instruction, not a schema constraint: `maxItems`
-    is not enforced by the API, so M6 truncates rather than failing an otherwise-good
-    response."""
 
 
 # --- select_procedures ---------------------------------------------------------------
@@ -90,6 +96,12 @@ class RiskIdentificationOutput(BaseModel):
 
 class SelectedProcedureOutput(BaseModel):
     procedure_id: str = Field(description="Must be an id from the supplied catalogue subset.")
+    risk_ids: list[str] = Field(
+        description=(
+            "The ids of the risks this procedure responds to. At least one, and every id "
+            "must be one of the risks supplied for this audit area."
+        )
+    )
     rationale: str
 
 
@@ -100,14 +112,24 @@ class SuggestedProcedureOutput(BaseModel):
     """
 
     description: str
+    risk_ids: list[str] = Field(description="The ids of the risks this procedure responds to.")
     rationale: str
 
 
 class ProcedureSelectionOutput(BaseModel):
+    """One response covering every risk in an audit area (SPEC 6.1, 13).
+
+    `risk_ids` on each entry is what preserves
+    Procedure -> Risk -> Assertion -> Audit Area -> Company Facts -> ISA.
+    """
+
     selected_procedures: list[SelectedProcedureOutput]
-    suggested_new_procedure: SuggestedProcedureOutput | None = Field(
-        default=None,
-        description="Only when no catalogue procedure adequately responds to the risk.",
+    suggested_new_procedures: list[SuggestedProcedureOutput] = Field(
+        default_factory=list,
+        description=(
+            "Only where no catalogue procedure adequately responds to a risk. Each requires "
+            "auditor approval before use."
+        ),
     )
 
 

@@ -45,10 +45,19 @@ AI_SUGGESTION_LABEL = "AI SUGGESTION — AUDITOR APPROVAL REQUIRED"
 
 
 class Procedure(BaseModel):
-    """A procedure selected for a specific risk (SPEC 4)."""
+    """A procedure selected in response to one or more risks (SPEC 4, 13).
+
+    Procedures are held on the audit area (`FinancialLineItemAssessment.procedures`), not
+    nested under a single risk, because one procedure genuinely answers several risks — test
+    counts address both shrinkage and over-receipting. The relationship is carried explicitly
+    in `risk_ids` rather than by duplicating the procedure under each risk, so there is one
+    object per selected procedure and no copies to keep in sync.
+    """
 
     id: str
-    risk_id: str
+    risk_ids: list[str] = Field(min_length=1)
+    """The risks this procedure responds to. Never empty: a procedure answering nothing
+    would break the SPEC 14 traceability chain."""
     procedure_id: str | None = None
     """Catalogue entry id. None for an AI suggestion, which has no catalogue entry."""
     name: str
@@ -85,9 +94,11 @@ class RiskAssessment(BaseModel):
     rationale: str
     supporting_fact_ids: list[str] = Field(default_factory=list)
     isa_refs: list[str] = Field(default_factory=list)
-    procedures: list[Procedure] = Field(default_factory=list)
     is_overridden: bool = False
     override_reason: str | None = None
+    # Procedures are not held here. They live on the audit area and name the risks they
+    # address, so a procedure answering several risks exists once (see `Procedure`). Use
+    # `FinancialLineItemAssessment.procedures_for(risk.id)` to fetch them.
 
 
 class AssertionAssessment(BaseModel):

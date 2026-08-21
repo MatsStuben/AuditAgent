@@ -17,19 +17,18 @@ from src.llm.client import (
     TaskConfig,
 )
 from src.llm.prompts import (
-    ASSESS_ASSERTIONS,
-    ASSESS_RISKS,
+    ANALYSE_AUDIT_AREA,
     EXTRACT_COMPANY_FACTS,
     GENERALIZE_FEEDBACK,
     SELECT_PROCEDURES,
 )
 from src.llm.schemas import (
-    AssertionRelevanceOutput,
+    AssertionAnalysisOutput,
+    AuditAreaAnalysisOutput,
     CompanyFactsOutput,
     FeedbackClassificationOutput,
+    IdentifiedRiskOutput,
     ProcedureSelectionOutput,
-    RiskAssessmentOutput,
-    RiskIdentificationOutput,
 )
 from src.models.audit_objects import Assertion, RiskLevel
 from tests.fakes import FailingLLMClient, ScriptedLLMClient
@@ -39,7 +38,18 @@ from tests.fakes import FailingLLMClient, ScriptedLLMClient
 
 def test_task_config_covers_every_task():
     assert set(TASK_CONFIG) == set(LLMTask)
-    assert len(LLMTask) == 5  # the five SPEC 21 services
+    assert len(LLMTask) == 4  # the four SPEC 21 services
+
+
+def test_per_area_tasks_get_the_larger_token_budgets():
+    """Both batched calls cover a whole audit area, so they need far more room than the
+    per-assertion calls they replaced (SPEC 6.1)."""
+    assert TASK_CONFIG[LLMTask.ANALYSE_AUDIT_AREA].max_tokens >= 16_000
+    assert TASK_CONFIG[LLMTask.SELECT_PROCEDURES].max_tokens >= 8_000
+    assert (
+        TASK_CONFIG[LLMTask.ANALYSE_AUDIT_AREA].max_tokens
+        > TASK_CONFIG[LLMTask.EXTRACT_COMPANY_FACTS].max_tokens
+    )
 
 
 @pytest.mark.parametrize("task", list(LLMTask))
@@ -56,7 +66,7 @@ def test_effort_is_tuned_per_task_not_uniform():
     efforts = {task: TASK_CONFIG[task].effort for task in LLMTask}
 
     assert efforts[LLMTask.EXTRACT_COMPANY_FACTS] == "low"  # near-mechanical
-    assert efforts[LLMTask.ASSESS_RISKS] == "high"  # the core judgement
+    assert efforts[LLMTask.ANALYSE_AUDIT_AREA] == "high"  # the core judgement
     assert len(set(efforts.values())) > 1
 
 
@@ -65,8 +75,7 @@ def test_effort_is_tuned_per_task_not_uniform():
 
 @pytest.mark.parametrize(
     "prompt",
-    [EXTRACT_COMPANY_FACTS, ASSESS_ASSERTIONS, ASSESS_RISKS, SELECT_PROCEDURES,
-     GENERALIZE_FEEDBACK],
+    [ANALYSE_AUDIT_AREA, EXTRACT_COMPANY_FACTS, SELECT_PROCEDURES, GENERALIZE_FEEDBACK],
 )
 def test_prompts_do_not_ask_for_json(prompt):
     """Output shape is enforced by schema; describing it in prose would duplicate that."""
@@ -74,18 +83,30 @@ def test_prompts_do_not_ask_for_json(prompt):
     assert prompt.strip()
 
 
-def test_risk_prompt_does_not_ask_for_a_rating():
+def test_analysis_prompt_does_not_ask_for_a_rating():
     """The rating is derived from the matrix, so the model must not be asked for one."""
-    assert "risk_rating" not in ASSESS_RISKS
-    assert "likelihood" in ASSESS_RISKS and "magnitude" in ASSESS_RISKS
+    assert "risk_rating" not in ANALYSE_AUDIT_AREA
+    assert "likelihood" in ANALYSE_AUDIT_AREA and "magnitude" in ANALYSE_AUDIT_AREA
+
+
+def test_analysis_prompt_covers_both_relevance_and_risks():
+    """One prompt now does the work of the two it replaced (SPEC 6.1)."""
+    assert "315.29" in ANALYSE_AUDIT_AREA  # relevance
+    assert "315.28(b)" in ANALYSE_AUDIT_AREA  # risks
+    assert "not relevant must have no risks" in ANALYSE_AUDIT_AREA
+
+
+def test_procedure_prompt_asks_for_risk_ids():
+    """Traceability depends on each procedure naming the risks it answers (SPEC 13)."""
+    assert "risk ids" in SELECT_PROCEDURES
 
 
 # --- schemas: bounded values ---------------------------------------------------------
 
 
 def test_valid_risk_payload_parses():
-    output = RiskAssessmentOutput(
-        risk_description="Inventory may be carried above recoverable value.",
+    output = IdentifiedRiskOutput(
+        description="Inventory may be carried above recoverable value.",
         likelihood="high",
         magnitude="medium",
         rationale="Aged seasonal stock.",
@@ -98,56 +119,102 @@ def test_valid_risk_payload_parses():
 
 def test_out_of_range_likelihood_is_rejected():
     with pytest.raises(ValidationError):
-        RiskAssessmentOutput(
-            risk_description="x", likelihood="severe", magnitude="high", rationale="y"
+        IdentifiedRiskOutput(
+            description="x", likelihood="severe", magnitude="high", rationale="y"
         )
 
 
 def test_unknown_assertion_is_rejected():
     with pytest.raises(ValidationError):
-        AssertionRelevanceOutput(
+        AuditAreaAnalysisOutput(
             assertions=[{"assertion": "cutoff", "relevant": True, "rationale": "x"}]
         )
 
 
 def test_risk_output_has_no_rating_field():
     """Decision 3: the model returns likelihood and magnitude only (SPEC 11)."""
-    assert "risk_rating" not in RiskAssessmentOutput.model_fields
-    assert set(RiskAssessmentOutput.model_fields) == {
-        "risk_description", "likelihood", "magnitude", "rationale", "supporting_fact_ids",
+    assert "risk_rating" not in IdentifiedRiskOutput.model_fields
+    assert set(IdentifiedRiskOutput.model_fields) == {
+        "description", "likelihood", "magnitude", "rationale", "supporting_fact_ids",
     }
 
 
 def test_supporting_fact_ids_default_to_empty():
-    output = RiskAssessmentOutput(
-        risk_description="x", likelihood="low", magnitude="low", rationale="y"
+    output = IdentifiedRiskOutput(
+        description="x", likelihood="low", magnitude="low", rationale="y"
     )
     assert output.supporting_fact_ids == []
 
 
-def test_two_risks_parse_and_more_are_not_schema_blocked():
-    """The cap is a prompt instruction; M6 truncates rather than failing a good response."""
-    assert len(RiskIdentificationOutput(risks=[_risk(), _risk()]).risks) == 2
-    assert len(RiskIdentificationOutput(risks=[_risk(), _risk(), _risk()]).risks) == 3
+def test_risks_nest_inside_their_assertion():
+    """SPEC 6.1: relevance and risks arrive in one response, not two."""
+    output = AuditAreaAnalysisOutput(
+        assertions=[
+            AssertionAnalysisOutput(
+                assertion="valuation", relevant=True, rationale="x", risks=[_risk(), _risk()]
+            ),
+            AssertionAnalysisOutput(
+                assertion="existence", relevant=False, rationale="y"
+            ),
+        ]
+    )
+
+    assert len(output.assertions[0].risks) == 2
+    assert output.assertions[1].risks == []  # defaults to empty
 
 
-def _risk() -> RiskAssessmentOutput:
-    return RiskAssessmentOutput(
-        risk_description="x", likelihood="low", magnitude="low", rationale="y"
+def test_more_than_two_risks_are_not_schema_blocked():
+    """The cap is a prompt instruction; the analyser truncates rather than failing."""
+    output = AuditAreaAnalysisOutput(
+        assertions=[
+            AssertionAnalysisOutput(
+                assertion="valuation", relevant=True, rationale="x",
+                risks=[_risk(), _risk(), _risk()],
+            )
+        ]
+    )
+
+    assert len(output.assertions[0].risks) == 3
+
+
+def _risk() -> IdentifiedRiskOutput:
+    return IdentifiedRiskOutput(
+        description="x", likelihood="low", magnitude="low", rationale="y"
     )
 
 
-def test_procedure_selection_suggestion_is_optional():
-    without = ProcedureSelectionOutput(
-        selected_procedures=[{"procedure_id": "INV_SUBSEQUENT_SALES", "rationale": "x"}]
+def test_selected_procedures_carry_the_risk_ids_they_address():
+    """SPEC 13: this is what preserves Procedure -> Risk -> Assertion -> Area."""
+    output = ProcedureSelectionOutput(
+        selected_procedures=[
+            {"procedure_id": "INV_PHYSICAL_COUNT", "risk_ids": ["risk_1", "risk_2"],
+             "rationale": "x"}
+        ]
     )
-    assert without.suggested_new_procedure is None
 
-    with_suggestion = ProcedureSelectionOutput(
+    assert output.selected_procedures[0].risk_ids == ["risk_1", "risk_2"]
+    assert output.suggested_new_procedures == []
+
+
+def test_procedure_suggestions_are_a_list_and_optional():
+    """One call now covers every risk in an area, so several suggestions are possible."""
+    with_suggestions = ProcedureSelectionOutput(
         selected_procedures=[],
-        suggested_new_procedure={"description": "d", "rationale": "r"},
+        suggested_new_procedures=[
+            {"description": "d", "risk_ids": ["risk_1"], "rationale": "r"}
+        ],
     )
-    assert with_suggestion.suggested_new_procedure.description == "d"
+
+    assert with_suggestions.suggested_new_procedures[0].description == "d"
+    assert with_suggestions.suggested_new_procedures[0].risk_ids == ["risk_1"]
+
+
+def test_selected_procedure_without_risk_ids_is_rejected():
+    """A procedure addressing nothing would break the traceability chain."""
+    with pytest.raises(ValidationError):
+        ProcedureSelectionOutput(
+            selected_procedures=[{"procedure_id": "X", "rationale": "x"}]
+        )
 
 
 def test_company_facts_output_allows_empty():
@@ -242,10 +309,10 @@ def test_client_applies_the_task_config():
 
 def test_client_config_is_injectable():
     stub = _StubAnthropic(_response(_Out(value="ok")))
-    override = {LLMTask.ASSESS_RISKS: TaskConfig(model="other", max_tokens=11, effort="max")}
+    override = {LLMTask.ANALYSE_AUDIT_AREA: TaskConfig(model="other", max_tokens=11, effort="max")}
     client = AnthropicLLMClient(client=stub, config=override)
 
-    client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+    client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
     assert stub.messages.kwargs["model"] == "other"
     assert stub.messages.kwargs["max_tokens"] == 11
@@ -258,7 +325,7 @@ def test_refusal_raises_rather_than_returning_none():
     client = AnthropicLLMClient(client=stub)
 
     with pytest.raises(LLMError, match="declined"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 def test_truncated_response_raises():
@@ -266,7 +333,7 @@ def test_truncated_response_raises():
     client = AnthropicLLMClient(client=stub)
 
     with pytest.raises(LLMError, match="token cap"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 def test_missing_parsed_output_raises():
@@ -274,7 +341,7 @@ def test_missing_parsed_output_raises():
     client = AnthropicLLMClient(client=stub)
 
     with pytest.raises(LLMError, match="no parsed output"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 def test_connection_error_is_wrapped():
@@ -282,7 +349,7 @@ def test_connection_error_is_wrapped():
     client = AnthropicLLMClient(client=stub)
 
     with pytest.raises(LLMError, match="could not reach"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 def test_api_status_error_is_wrapped_with_its_code():
@@ -294,7 +361,7 @@ def test_api_status_error_is_wrapped_with_its_code():
     client = AnthropicLLMClient(client=_StubAnthropic(error))
 
     with pytest.raises(LLMError, match="429"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 def test_rate_limit_and_not_found_both_surface_their_status():
@@ -306,7 +373,7 @@ def test_rate_limit_and_not_found_both_surface_their_status():
     client = AnthropicLLMClient(client=_StubAnthropic(not_found))
 
     with pytest.raises(LLMError, match="404"):
-        client.parse(task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=_Out)
+        client.parse(task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=_Out)
 
 
 # --- the scripted fake ---------------------------------------------------------------
@@ -314,33 +381,33 @@ def test_rate_limit_and_not_found_both_surface_their_status():
 
 def test_fake_returns_queued_responses_in_order():
     first, second = _risk(), _risk()
-    client = ScriptedLLMClient(assess_risks=[first, second])
+    client = ScriptedLLMClient(analyse_audit_area=[first, second])
 
     a = client.parse(
-        task=LLMTask.ASSESS_RISKS, system="s", user="u1", output_format=RiskAssessmentOutput
+        task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u1", output_format=IdentifiedRiskOutput
     )
     b = client.parse(
-        task=LLMTask.ASSESS_RISKS, system="s", user="u2", output_format=RiskAssessmentOutput
+        task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u2", output_format=IdentifiedRiskOutput
     )
 
     assert a is first and b is second
-    assert client.call_count(LLMTask.ASSESS_RISKS) == 2
+    assert client.call_count(LLMTask.ANALYSE_AUDIT_AREA) == 2
     assert client.call_count() == 2
-    assert client.last_user_message(LLMTask.ASSESS_RISKS) == "u2"
+    assert client.last_user_message(LLMTask.ANALYSE_AUDIT_AREA) == "u2"
 
 
 def test_fake_accepts_a_single_response_without_a_list():
-    client = ScriptedLLMClient(assess_risks=_risk())
+    client = ScriptedLLMClient(analyse_audit_area=_risk())
 
     client.parse(
-        task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+        task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=IdentifiedRiskOutput
     )
 
     client.assert_all_consumed()
 
 
 def test_fake_rejects_an_unscripted_task():
-    client = ScriptedLLMClient(assess_risks=_risk())
+    client = ScriptedLLMClient(analyse_audit_area=_risk())
 
     with pytest.raises(AssertionError, match="unscripted LLM call"):
         client.parse(
@@ -350,24 +417,26 @@ def test_fake_rejects_an_unscripted_task():
 
 
 def test_fake_rejects_more_calls_than_scripted():
-    client = ScriptedLLMClient(assess_risks=[_risk()])
+    client = ScriptedLLMClient(analyse_audit_area=[_risk()])
     client.parse(
-        task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+        task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=IdentifiedRiskOutput
     )
 
     with pytest.raises(AssertionError, match="more times than scripted"):
         client.parse(
-            task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+            task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u",
+            output_format=IdentifiedRiskOutput,
         )
 
 
 def test_fake_rejects_a_wrongly_typed_response():
     """Catches a test that queues the wrong shape for the service under test."""
-    client = ScriptedLLMClient(assess_risks=CompanyFactsOutput(facts=[]))
+    client = ScriptedLLMClient(analyse_audit_area=CompanyFactsOutput(facts=[]))
 
-    with pytest.raises(AssertionError, match="asked for RiskAssessmentOutput"):
+    with pytest.raises(AssertionError, match="asked for IdentifiedRiskOutput"):
         client.parse(
-            task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+            task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u",
+            output_format=IdentifiedRiskOutput,
         )
 
 
@@ -377,9 +446,9 @@ def test_fake_rejects_an_unknown_task_name():
 
 
 def test_assert_all_consumed_flags_leftovers():
-    client = ScriptedLLMClient(assess_risks=[_risk(), _risk()])
+    client = ScriptedLLMClient(analyse_audit_area=[_risk(), _risk()])
     client.parse(
-        task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+        task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u", output_format=IdentifiedRiskOutput
     )
 
     with pytest.raises(AssertionError, match="never consumed"):
@@ -391,7 +460,8 @@ def test_failing_fake_propagates_its_error():
 
     with pytest.raises(LLMError, match="upstream down"):
         client.parse(
-            task=LLMTask.ASSESS_RISKS, system="s", user="u", output_format=RiskAssessmentOutput
+            task=LLMTask.ANALYSE_AUDIT_AREA, system="s", user="u",
+            output_format=IdentifiedRiskOutput,
         )
 
 
@@ -423,40 +493,27 @@ def test_live_structured_output_round_trip():
 
 
 @pytest.mark.llm
-def test_live_enum_constraint_is_enforced_by_the_api():
-    """The bounded values in SPEC 21 must come back inside the enum, not as free text."""
+def test_live_nested_schema_round_trips_with_enums_enforced():
+    """The batched shape is the demanding one: nested objects plus bounded enums at depth."""
     client = AnthropicLLMClient()
     result = client.parse(
-        task=LLMTask.ASSESS_RISKS,
-        system=ASSESS_RISKS,
+        task=LLMTask.ANALYSE_AUDIT_AREA,
+        system=ANALYSE_AUDIT_AREA,
         user=(
             "Audit area: inventory, GBP 8.9m, 34x materiality, up 43% year on year.\n"
-            "Assertion: valuation.\n"
+            "Candidate assertions: existence, completeness, accuracy, valuation, "
+            "rights_and_obligations.\n"
             "Company context: seasonal fashion retailer with meaningful aged stock."
         ),
-        output_format=RiskIdentificationOutput,
-    )
-
-    assert 1 <= len(result.risks) <= 2
-    for risk in result.risks:
-        assert risk.likelihood in set(RiskLevel)
-        assert risk.magnitude in set(RiskLevel)
-        assert risk.risk_description and risk.rationale
-
-
-@pytest.mark.llm
-def test_live_assertion_verdicts_stay_inside_the_candidate_enum():
-    client = AnthropicLLMClient()
-    result = client.parse(
-        task=LLMTask.ASSESS_ASSERTIONS,
-        system=ASSESS_ASSERTIONS,
-        user=(
-            "Audit area: cash, GBP 3.12m, 12x materiality.\n"
-            "Candidate assertions: existence, completeness, accuracy, rights_and_obligations.\n"
-            "Company context: fast-growing fashion retailer."
-        ),
-        output_format=AssertionRelevanceOutput,
+        output_format=AuditAreaAnalysisOutput,
     )
 
     assert result.assertions
-    assert all(v.assertion in set(Assertion) for v in result.assertions)
+    assert all(a.assertion in set(Assertion) for a in result.assertions)
+    for analysis in result.assertions:
+        for risk in analysis.risks:
+            assert risk.likelihood in set(RiskLevel)
+            assert risk.magnitude in set(RiskLevel)
+            assert risk.description and risk.rationale
+    # The whole area came back in one response — the SPEC 6.1 claim.
+    assert any(a.risks for a in result.assertions)

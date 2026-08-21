@@ -28,26 +28,20 @@ specific facts over many vague ones. If the context contains nothing audit-relev
 an empty list."""
 
 
-ASSESS_ASSERTIONS = f"""\
+ANALYSE_AUDIT_AREA = f"""\
 {SHARED_PREAMBLE}
 
-Decide which of the candidate assertions are relevant for this financial statement area on \
-this specific engagement (ISA 315.29).
+Analyse one financial statement area for this engagement, in two connected steps.
 
-Return a verdict for every candidate assertion you are given — do not omit any. An assertion \
-is relevant when there is a reasonable possibility of a material misstatement affecting it, \
-given this company's circumstances. Base that on the company context and facts supplied, not \
-on generic expectations for the area. Cite the fact IDs that support each verdict."""
+Step 1 — relevance (ISA 315.29). Decide which of the candidate assertions are relevant for \
+this area on this specific engagement. Return a verdict for every candidate assertion you \
+are given; do not omit any. An assertion is relevant when there is a reasonable possibility \
+of a material misstatement affecting it, given this company's circumstances. Base that on the \
+company context and facts supplied, not on generic expectations for the area.
 
-
-ASSESS_RISKS = f"""\
-{SHARED_PREAMBLE}
-
-Identify the risk of material misstatement for the given assertion and assess it \
-(ISA 315.28(b), 315.31).
-
-Describe what could actually go wrong for this company, specifically enough that an auditor \
-could design a procedure against it. Then assess:
+Step 2 — risks (ISA 315.28(b), 315.31). For each assertion you judged relevant, identify the \
+risk of material misstatement and assess it. Describe what could actually go wrong for this \
+company, specifically enough that an auditor could design a procedure against it. Then assess:
 
 - likelihood: how probable a material misstatement affecting this assertion is
 - magnitude: how large the misstatement could be if it occurred
@@ -55,23 +49,33 @@ could design a procedure against it. Then assess:
 Assess these two independently. Do not assess an overall risk rating — that is derived from \
 your likelihood and magnitude by firm methodology, not by you.
 
-Return the single most significant risk. Add a second only if it is genuinely distinct in \
-cause, not a restatement of the first."""
+For each relevant assertion give the single most significant risk. Add a second only if it is \
+genuinely distinct in cause, not a restatement of the first. Never more than two.
+
+An assertion you judged not relevant must have no risks.
+
+Cite the fact IDs that support each verdict and each risk."""
 
 
 SELECT_PROCEDURES = f"""\
 {SHARED_PREAMBLE}
 
-Select audit procedures that respond to the assessed risk (ISA 330.6, 330.7).
+Select audit procedures that respond to the assessed risks for this area (ISA 330.6, 330.7).
 
-Choose only from the catalogue provided. Select the procedures that address this specific \
-risk — not every procedure that touches the area. As the assessed risk increases, the \
-response must be more persuasive: prefer stronger evidence and broader coverage for higher \
-risk, and keep the response proportionate for lower risk.
+You are given every assessed risk for one financial statement area, each with an id and a risk \
+rating. Choose only from the catalogue provided, and cover every risk.
 
-If, and only if, no catalogue procedure adequately responds to the risk, you may additionally \
-suggest one new procedure. It will be flagged for auditor approval and will not be used \
-without it."""
+For each procedure you select, state which risk ids it responds to. One procedure may respond \
+to several risks; say so rather than repeating it. Select the procedures that address the \
+specific risks described — not every procedure that touches the area.
+
+As the assessed rating increases, the response must be more persuasive: prefer stronger \
+evidence and broader coverage for higher-rated risks, and keep the response proportionate for \
+lower-rated ones.
+
+If, and only if, no catalogue procedure adequately responds to a risk, you may additionally \
+suggest a new procedure for it. Suggestions are flagged for auditor approval and will not be \
+used without it."""
 
 
 GENERALIZE_FEEDBACK = f"""\
