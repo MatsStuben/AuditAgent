@@ -1060,6 +1060,30 @@ auditor overrides held on them. That is the cost of batching an area into one ca
 must warn before it happens. The risk-rating case is deliberately routed around it: that is the
 most common override, and it must never destroy the system's original conclusion.
 
+Two consequences of that batching are worth stating.
+
+Where re-analysis still judges a ruled-in assertion irrelevant, the auditor's verdict stands and
+the assertion is left carrying no risks. Coverage then reports the ISA 315.28(b)/31 gap, which is
+the honest outcome: the engine holds no risk for that assertion, and inventing one to close the
+gap would present a fabrication as an assessment.
+
+A figures change reruns an audit area only where its **scope** changed. An area that stays in
+scope keeps its existing work even where its own amount moved, because re-analysis discards every
+override held in that area and a figure edit is not, by itself, a reason to destroy the auditor's
+judgements. Re-running such an area is available explicitly, not automatic.
+
+**A recompute either completes or leaves the engagement as it was.** LLM calls fail, and a
+half-applied override is worse than a failed one: it puts a new rating above the old work, or a
+new context above assessments drawn from the old one, with nothing on screen to say so. Each
+override restores what it changed if any call in its sequence fails, and records its
+`AuditorFeedback` only once the recompute has succeeded. The one thing not rolled back is the ID
+counter — reusing an ID a failed run consumed is what Section 14 forbids.
+
+**`is_overridden` describes the current state, not the history.** An auditor who moves a rating
+away from `system_rating` and later moves it back is no longer departing from the engine's
+conclusion, so the marker and its reason are cleared. Both moves remain in the append-only
+feedback log; what would be wrong is the live risk showing a disagreement that has been withdrawn.
+
 For the MVP, this can be implemented with normal Streamlit reruns and explicit recomputation functions.
 
 No complex reactive framework is required.
@@ -1089,6 +1113,16 @@ Example:
 ```
 
 Do not simply overwrite the original system output and lose it.
+
+Records are held on the engagement in `feedback`, oldest first, and are append-only. A record
+outlives the object it describes: ruling an assertion back in re-analyses the area and replaces
+every assertion and risk in it, and the feedback log is then the only place the superseded
+conclusion still exists.
+
+An override that changes nothing — the same rating, the same relevance, the same context text —
+records nothing and recomputes nothing. Feedback is evidence of a disagreement, and a no-op
+entry would be a false one, both in the log the auditor reads and in the input Section 19
+generalises from.
 
 ---
 

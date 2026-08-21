@@ -483,6 +483,25 @@ objects.
 - Assertion relevance true→false removes exactly that assertion's risks and procedures; flipping back
   regenerates them.
 
+**As built.** `select_procedures` gained a `risk_ids` argument: the scoped call shows the model only
+those risks and narrows the catalogue subset to their assertions, so it can neither answer nor
+re-link work the override never touched. `_merge_procedures` folds the result back — a procedure
+loses only the changed risk IDs, survives on its remaining ones, and is dropped only when the
+changed risks were its whole reason to exist; a fresh selection naming a catalogue entry the area
+already holds re-links that same object rather than creating a second.
+
+Every LLM-backed override is all-or-nothing: `run_area` restores the area if either of its calls
+fails, `override_risk_rating` puts the rating back if selection fails, and the two engagement-wide
+recomputes snapshot and restore via `_capture`/`_restore`. Feedback is appended only after the
+recompute succeeds. The ID counter is deliberately not rolled back (SPEC 14).
+
+`AuditEngagement.feedback` holds the append-only log. An override that changes nothing returns
+`None`, records nothing and makes no call. `is_overridden` is derived from
+`final_rating != system_rating`, so reverting to the system rating clears the marker while both
+moves stay in the log. Coverage is deliberately **not** stored or returned by
+these functions: `check_isa_coverage` is a pure read over live state, so there is nothing to
+invalidate and callers ask for a current report when they want one.
+
 **Depends on:** M8, M10.
 
 ---

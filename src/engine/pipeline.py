@@ -76,19 +76,29 @@ def run_area(
     client: LLMClient,
     config: StaticConfig | None = None,
 ) -> None:
-    """Both LLM calls for one audit area. The unit M11 re-runs (SPEC 17).
+    """Both LLM calls for one audit area, all-or-nothing. The unit M11 re-runs (SPEC 17).
 
-    Procedures are cleared *before* re-analysis, not after: analysis replaces the area's
-    risks, so procedures naming the old ones would be dangling in the window between the two
-    calls — and would stay dangling if selection then failed.
+    Either both calls succeed and the area is replaced, or the area is left exactly as it was.
+    A half-run area is the worst outcome available here: analysis replaces the area's risks, so
+    a failure between the two calls would leave procedures naming risks that no longer exist —
+    an audit file that reads as complete while its traceability is broken.
+
+    Analysis is therefore assigned only once it returns, and the previous state is restored if
+    selection then fails. IDs consumed by a failed run are not returned to the counter: reusing
+    them is what SPEC 14 forbids (`AuditEngagement.next_id`).
     """
+    previous = (line_item.assertions, line_item.procedures)
+    assertions = analyse_audit_area(line_item, engagement, client=client, config=config)
+
+    line_item.assertions = assertions
     line_item.procedures = []
-    line_item.assertions = analyse_audit_area(
-        line_item, engagement, client=client, config=config
-    )
-    line_item.procedures = select_procedures(
-        line_item, engagement, client=client, config=config
-    )
+    try:
+        line_item.procedures = select_procedures(
+            line_item, engagement, client=client, config=config
+        )
+    except Exception:
+        line_item.assertions, line_item.procedures = previous
+        raise
 
 
 def run_pipeline(

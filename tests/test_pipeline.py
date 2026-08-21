@@ -218,17 +218,18 @@ class _FailsOnSelection:
         return self._analysis
 
 
-def test_run_area_clears_procedures_before_re_analysing(static_config, client):
-    """A failure between the two calls must not leave procedures naming replaced risks.
+def test_a_failed_selection_leaves_the_area_exactly_as_it_was(static_config, client):
+    """`run_area` is all-or-nothing (SPEC 17).
 
-    Re-analysis assigns new risk IDs, so procedures from the previous run become dangling
-    the moment it succeeds. Clearing first means a failed selection leaves the area with no
-    procedures rather than wrong ones.
+    Re-analysis assigns new risk IDs, so keeping a successful analysis after a failed
+    selection would leave an area whose procedures name risks that no longer exist — or, once
+    cleared, an area silently missing its responses. Restoring the previous state leaves the
+    auditor with the file they already had, which is the only honest outcome of a failed call.
     """
     engagement = run_pipeline(load_engagement(static_config), client=client, config=static_config)
     inventory = engagement.line_item("inventory")
+    before = (inventory.assertions, inventory.procedures)
     assert inventory.procedures
-    assert inventory.dangling_risk_ids() == set()
 
     broken = _FailsOnSelection(
         scripted_analysis(Assertion.EXISTENCE, static_config.candidate_assertions("inventory"))
@@ -236,9 +237,9 @@ def test_run_area_clears_procedures_before_re_analysing(static_config, client):
     with pytest.raises(LLMError):
         run_area(inventory, engagement, client=broken, config=static_config)
 
-    assert inventory.procedures == []
+    assert (inventory.assertions, inventory.procedures) == before
+    assert inventory.assertions is before[0]  # the original objects, not equal copies
     assert inventory.dangling_risk_ids() == set()
-    assert inventory.assertions  # the analysis that succeeded is kept
 
 
 def test_run_area_replaces_rather_than_appends(static_config, client):

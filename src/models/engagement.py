@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 
 from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
+from src.models.feedback import AuditorFeedback, RuleProposal
 
 
 class CompanyFact(BaseModel):
@@ -105,6 +106,19 @@ class AuditEngagement(BaseModel):
     company_facts: list[CompanyFact] = Field(default_factory=list)
     materiality: Materiality | None = None
     line_items: list[FinancialLineItemAssessment] = Field(default_factory=list)
+    feedback: list[AuditorFeedback] = Field(default_factory=list)
+    """Every auditor override, oldest first (SPEC 18).
+
+    Append-only. A record survives the object it describes — an assertion flipped back to
+    relevant discards its risks, and the feedback is then the only place the original system
+    conclusion still exists.
+    """
+    rule_proposals: list[RuleProposal] = Field(default_factory=list)
+    """Candidate methodology rules awaiting a human decision (SPEC 19).
+
+    Runtime only. Nothing here is applied to the engagement or written back to the static
+    config files — a proposal is a suggestion to a methodology owner, not a change.
+    """
     id_sequences: dict[str, int] = Field(default_factory=dict)
     """Monotonic ID counters, one per object-type prefix. See `next_id`."""
 

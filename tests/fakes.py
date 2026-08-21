@@ -6,6 +6,11 @@ Usage:
     ...
     assert client.call_count(LLMTask.ASSESS_RISKS) == 2
 
+A queued `Exception` is raised rather than returned, which is how a test makes the *second* of
+several calls fail:
+
+    ScriptedLLMClient(analyse_audit_area=[good_output, RuntimeError("api down")])
+
 The fake is strict on purpose. It fails loudly when a task is called that the test did not
 script, when a queue is exhausted, or when a queued object is the wrong type for the
 requested `output_format` — all of which mean the test is not exercising what it claims.
@@ -53,6 +58,10 @@ class ScriptedLLMClient:
             )
 
         response = queue.pop(0)
+        if isinstance(response, Exception):
+            # A queued exception is how a test scripts an API failure part-way through a
+            # multi-call recompute, so the rollback path can be exercised at any point.
+            raise response
         if not isinstance(response, output_format):
             raise AssertionError(
                 f"{task} scripted with {type(response).__name__} but the service asked for "

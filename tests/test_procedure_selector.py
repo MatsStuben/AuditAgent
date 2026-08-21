@@ -566,6 +566,56 @@ def test_unscoped_line_item_is_rejected(raiatea_engagement):
     assert client.call_count() == 0
 
 
+# --- scoped re-selection (SPEC 17) ----------------------------------------------------
+
+
+def test_a_scoped_call_offers_only_the_named_risks(engagement, inventory):
+    """An override re-selects for the risk it changed, not for the whole area."""
+    client = _client(_output(_selection("INV_SUBSEQUENT_SALES", ["risk_3"])))
+
+    procedures = select_procedures(
+        inventory, engagement, client=client, risk_ids={"risk_3"}
+    )
+
+    (call,) = client.calls
+    assert "risk_3" in call.user
+    assert "risk_1" not in call.user and "risk_2" not in call.user
+    assert [p.risk_ids for p in procedures] == [["risk_3"]]
+
+
+def test_a_scoped_call_narrows_the_catalogue_to_those_risks_assertions(
+    engagement, inventory
+):
+    """Offering the whole area's catalogue would invite work for risks nobody asked about."""
+    client = _client(_output(_selection("INV_SUBSEQUENT_SALES", ["risk_3"])))
+
+    select_procedures(inventory, engagement, client=client, risk_ids={"risk_3"})
+
+    (call,) = client.calls
+    # risk_3 is a valuation risk; existence-only procedures are not on offer.
+    assert "INV_SUBSEQUENT_SALES" in call.user
+    assert "INV_PHYSICAL_COUNT" not in call.user
+
+
+def test_a_scoped_call_still_rejects_risks_outside_the_scope(engagement, inventory):
+    """The model may only answer what it was shown — otherwise a scoped call could
+    silently rewrite links for risks the override never touched."""
+    client = _client(_output(_selection("INV_SUBSEQUENT_SALES", ["risk_1", "risk_3"])))
+
+    procedures = select_procedures(
+        inventory, engagement, client=client, risk_ids={"risk_3"}
+    )
+
+    assert [p.risk_ids for p in procedures] == [["risk_3"]]
+
+
+def test_scoping_to_an_unknown_risk_raises(engagement, inventory):
+    with pytest.raises(ProcedureSelectionError, match="risk_99"):
+        select_procedures(
+            inventory, engagement, client=_client(_output()), risk_ids={"risk_99"}
+        )
+
+
 # --- live (opt-in) -------------------------------------------------------------------
 
 

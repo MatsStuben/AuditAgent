@@ -50,9 +50,11 @@ def _assertion_for(risk: RiskAssessment, assertions: list[AssertionAssessment]) 
     return match.assertion.value if match else "unknown"
 
 
-def _format_risks(line_item: FinancialLineItemAssessment) -> str:
+def _format_risks(
+    risks: list[RiskAssessment], line_item: FinancialLineItemAssessment
+) -> str:
     lines = []
-    for risk in line_item.all_risks:
+    for risk in risks:
         lines.append(
             f"- {risk.id} ({_assertion_for(risk, line_item.assertions)}, "
             f"rating: {risk.final_rating.value})\n"
@@ -86,17 +88,20 @@ def build_user_message(
     line_item: FinancialLineItemAssessment,
     engagement: AuditEngagement,
     subset: list[CatalogueProcedure],
+    risks: list[RiskAssessment] | None = None,
 ) -> str:
     """The bounded context SPEC 13 specifies, for one audit area.
 
     Ratings shown are `final_rating`, so an override is reflected here without re-analysis.
+    `risks` defaults to every risk in the area; a scoped re-selection passes a subset.
     """
+    risks = line_item.all_risks if risks is None else risks
     return f"""\
 Audit area: {line_item.line_item_type}
 
 Risks assessed for this area:
 
-{_format_risks(line_item)}
+{_format_risks(risks, line_item)}
 
 Company context:
 {format_company_context(engagement)}
@@ -115,12 +120,18 @@ def select_procedures(
     *,
     client: LLMClient,
     config: StaticConfig | None = None,
+    risk_ids: set[str] | None = None,
 ) -> list[Procedure]:
     """Return the procedures responding to every risk in this audit area.
 
     Does not assign to `line_item.procedures` — the caller does, and that assignment is what
     makes re-selection replace rather than append (SPEC 17). Consumes procedure IDs from the
     engagement's monotonic counter.
+
+    `risk_ids` narrows the call to some of the area's risks, which is how an override
+    re-selects work for the risk it changed without disturbing the rest of the area
+    (SPEC 17). The model then sees, and may answer, only those risks; merging the result back
+    into the area is the caller's job (`engine.recompute`).
     """
     config = config or get_config()
 
@@ -134,16 +145,31 @@ def select_procedures(
         # SPEC 6/8/13 confine procedure selection to material audit areas.
         return []
 
+    # Which assertion each risk belongs to, so a procedure cannot be linked to a risk its
+    # catalogue entry does not claim to address.
+    risk_assertions = {
+        risk.id: assertion.assertion
+        for assertion in line_item.assertions
+        for risk in assertion.risks
+    }
+
     risks = line_item.all_risks
+    if risk_ids is not None:
+        unknown = risk_ids - {risk.id for risk in risks}
+        if unknown:
+            raise ProcedureSelectionError(
+                f"{sorted(unknown)} are not risks of {line_item.line_item_type}"
+            )
+        risks = [risk for risk in risks if risk.id in risk_ids]
+
     if not risks:
         # Nothing to respond to. Any ISA 330.6/7 gap is surfaced by coverage, not invented here.
         return []
 
-    assertions_with_risks = [
-        assertion.assertion for assertion in line_item.assertions if assertion.risks
-    ]
     subset = catalogue_for_assertions(
-        line_item.line_item_type, assertions_with_risks, catalogue=config.procedure_catalogue
+        line_item.line_item_type,
+        [risk_assertions[risk.id] for risk in risks],
+        catalogue=config.procedure_catalogue,
     )
     if not subset:
         # Still call: SPEC 13 permits an AI suggestion precisely when the catalogue has no
@@ -158,18 +184,11 @@ def select_procedures(
     output = client.parse(
         task=LLMTask.SELECT_PROCEDURES,
         system=SELECT_PROCEDURES,
-        user=build_user_message(line_item, engagement, subset),
+        user=build_user_message(line_item, engagement, subset, risks),
         output_format=ProcedureSelectionOutput,
     )
 
     known_risk_ids = {risk.id for risk in risks}
-    # Which assertion each risk belongs to, so a procedure cannot be linked to a risk its
-    # catalogue entry does not claim to address.
-    risk_assertions = {
-        risk.id: assertion.assertion
-        for assertion in line_item.assertions
-        for risk in assertion.risks
-    }
     by_id = {procedure.id: procedure for procedure in subset}
     isa_refs = config.isa_refs_for(LinkedObjectType.PROCEDURE)
 
