@@ -122,6 +122,15 @@ def test_a_gap_is_surfaced_rather_than_left_to_be_noticed(engagement, static_con
     assert any("ISA330.6_7" in error.value for error in at.error), [e.value for e in at.error]
 
 
+def test_object_cards_explain_the_isa_requirement_they_address(engagement, static_config):
+    at = app(engagement, static_config)
+
+    captions = [caption.value for caption in at.caption]
+    assert any("Determine relevant assertions for material balances" in text for text in captions)
+    assert any("Identify and assess assertion-level risks" in text for text in captions)
+    assert any("Design procedures responsive to assessed risks" in text for text in captions)
+
+
 # --- the controls reach the engine ---------------------------------------------------------------
 
 

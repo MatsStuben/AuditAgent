@@ -78,6 +78,24 @@ def config():
     return st.session_state.config
 
 
+def isa_summary(isa_refs: list[str]) -> str:
+    """Explain the configured requirement each visible audit object addresses.
+
+    The link itself lives on the runtime object for traceability and coverage. This is only its
+    UI rendering, read from config so a methodology wording change is not duplicated here.
+    """
+    requirements = {requirement.id: requirement for requirement in config().isa_requirements}
+    descriptions = []
+    for isa_ref in isa_refs:
+        requirement = requirements.get(isa_ref)
+        if requirement is None:
+            descriptions.append(isa_ref)
+            continue
+        paragraphs = ", ".join(requirement.paragraphs)
+        descriptions.append(f"{requirement.standard} {paragraphs} — {requirement.purpose}")
+    return "Addresses: " + " · ".join(descriptions)
+
+
 def initialise() -> None:
     """Pre-populate everything (SPEC 16: no blank-form workflows).
 
@@ -301,8 +319,9 @@ def render_assertion(area, assertion) -> None:
         expanded=assertion.relevant,
     ):
         st.write(assertion.rationale)
+        st.caption(isa_summary(assertion.isa_refs))
         st.caption(
-            f"{assertion.id} · ISA {', '.join(assertion.isa_refs)}"
+            assertion.id
             + (
                 f" · cites {', '.join(assertion.supporting_fact_ids)}"
                 if assertion.supporting_fact_ids
@@ -349,6 +368,7 @@ def render_risk(area, risk) -> None:
         )
     )
     st.caption(risk.rationale)
+    st.caption(isa_summary(risk.isa_refs))
 
     with st.form(f"rating_{risk.id}"):
         columns = st.columns([1, 2, 1])
@@ -388,6 +408,7 @@ def render_procedures(area, risk, assertion_of: str) -> None:
         answers = ", ".join(procedure.risk_ids)
         st.markdown(f"- {label}  \n  evidence: {strength} · answers {answers}")
         st.caption(procedure.rationale)
+        st.caption(isa_summary(procedure.isa_refs))
 
         if procedure.source is ProcedureSource.AI_SUGGESTION:
             st.caption(f"⚠️ {AI_SUGGESTION_LABEL}")
