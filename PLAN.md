@@ -372,11 +372,21 @@ This test's fixture becomes the shared engagement fixture for M9–M11.
 + metrics → ISA requirement IDs). A procedure addressing several risks fans out into several complete chains;
 that is a property of the audit, not a gap (SPEC §14).
 
+The chain holds the runtime objects, not copies of their fields, so a UI reading
+`chain.risk.final_rating` after an M11 override sees the override rather than a stale snapshot. The
+`procedure` argument only *identifies* what to trace: every link is read from the engagement's own copy, so a
+deserialised or edited object with the same ID cannot report links the audit file does not contain.
+
 **Verify:** `tests/test_traceability.py` on the M8 fixture — tracing the inventory subsequent-sales procedure
-yields the valuation assertion, the inventory line item, the seasonality fact, and the ISA chain
-`ISA315.29 → ISA315.28b_31 → ISA330.6_7`. A procedure naming two risks yields two chains, each complete and
-differing only from the risk upward. A dangling `risk_id` raises rather than returning a partial chain.
-Deterministic, no LLM.
+yields the valuation assertion, the inventory line item, the aged-stock fact, the area's metrics, and the ISA
+chain `ISA315.29 → ISA315.28b_31 → ISA330.6_7`. A procedure naming two risks yields two chains, each complete
+and differing only from the risk upward. A dangling `risk_id`, `assertion_id` or `fact_id` raises rather than
+returning a partial chain — including when the *other* risks on the same procedure resolve fine, since
+returning the chains that happen to work would hide the broken one. Identity assertions confirm the chain
+aliases live state. Deterministic, no LLM.
+
+The M8 scripted run moves from `test_pipeline.py` into `conftest.py` here, as the `engagement` fixture: M9–M11
+all need a completed, fully linked engagement and none of them should be scripting LLM output to get one.
 
 **Depends on:** M8.
 
