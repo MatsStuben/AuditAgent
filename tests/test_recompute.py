@@ -709,7 +709,65 @@ def test_a_pbt_change_moves_materiality_and_reruns_only_scope_changes(
     assert cash.assertions == [] and cash.procedures == []
     assert cash.metrics is not None and cash.is_audit_area is True  # still displayed
     assert inventory.assertions is before
-    assert feedback.before == {"profit_before_tax": 5_240_000.0}
+    assert feedback.before == {"profit_before_tax": {"cy": 5_240_000.0}}
+
+
+def test_an_edited_in_scope_area_is_reanalysed_but_other_areas_are_untouched(
+    static_config, engagement
+):
+    """Its amount is model input; cash has no dependency on an inventory-only edit."""
+    inventory = engagement.line_item("inventory")
+    cash = engagement.line_item("cash")
+    before_cash = (cash.assertions, cash.procedures)
+    client = ScriptedLLMClient(
+        analyse_audit_area=scripted_analysis(
+            Assertion.VALUATION, static_config.candidate_assertions("inventory")
+        ),
+        select_procedures=scripted_selection("INV_SUBSEQUENT_SALES", "risk_3"),
+    )
+
+    feedback = update_financials(
+        engagement,
+        {"inventory": 8_800_000},
+        "Final inventory count revised the balance down.",
+        client=client,
+        config=static_config,
+    )
+
+    assert inventory.cy == 8_800_000
+    assert [risk.id for risk in inventory.all_risks] == ["risk_3"]
+    assert client.call_count(LLMTask.ANALYSE_AUDIT_AREA) == 1
+    assert client.call_count(LLMTask.SELECT_PROCEDURES) == 1
+    assert cash.assertions is before_cash[0]
+    assert cash.procedures is before_cash[1]
+    assert feedback.before == {"inventory": {"cy": 8_900_000.0}}
+    assert feedback.after == {"inventory": {"cy": 8_800_000}}
+
+
+def test_editing_prior_year_of_an_in_scope_area_reanalyses_that_area(
+    static_config, engagement
+):
+    client = ScriptedLLMClient(
+        analyse_audit_area=scripted_analysis(
+            Assertion.VALUATION, static_config.candidate_assertions("inventory")
+        ),
+        select_procedures=scripted_selection("INV_SUBSEQUENT_SALES", "risk_3"),
+    )
+
+    feedback = update_financials(
+        engagement,
+        {},
+        "The prior-year inventory comparative was corrected.",
+        prior_amounts={"inventory": 6_000_000},
+        client=client,
+        config=static_config,
+    )
+
+    assert engagement.line_item("inventory").py == 6_000_000
+    assert [risk.id for risk in engagement.line_item("inventory").all_risks] == ["risk_3"]
+    assert client.call_count() == 2
+    assert feedback.before == {"inventory": {"py": 6_200_000.0}}
+    assert feedback.after == {"inventory": {"py": 6_000_000}}
 
 
 def test_an_area_entering_scope_runs_both_of_its_calls(static_config, raiatea_engagement):
@@ -764,6 +822,18 @@ def test_an_unknown_line_item_raises(engagement):
         update_financials(
             engagement, {"goodwill": 1.0}, client=ScriptedLLMClient(), config=None
         )
+
+
+def test_invalid_turnover_is_rejected_before_any_audit_work_changes(engagement, static_config):
+    before = engagement.line_item("inventory").assertions
+
+    with pytest.raises(RecomputeError, match="turnover must be greater"):
+        update_financials(
+            engagement, {"turnover": 0}, client=ScriptedLLMClient(), config=static_config
+        )
+
+    assert engagement.line_item("inventory").assertions is before
+    assert engagement.feedback == []
 
 
 def test_unchanged_financials_do_nothing(static_config, engagement):

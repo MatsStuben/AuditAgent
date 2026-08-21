@@ -32,6 +32,7 @@ make LLM calls.
 """
 
 import logging
+import math
 
 from src.config.loader import StaticConfig, get_config
 from src.engine.catalogue import filter_catalogue
@@ -633,39 +634,62 @@ def update_financials(
     amounts: dict[str, float],
     reason: str = "",
     *,
+    prior_amounts: dict[str, float] | None = None,
     client: LLMClient,
     config: StaticConfig | None = None,
 ) -> AuditorFeedback | None:
-    """Revise current-year figures, then re-scope and rerun what scope change requires.
+    """Revise financial figures, then re-scope and rerun their affected audit area.
 
-    `amounts` maps line item type to a new CY amount. Materiality is recalculated and every
-    line item re-scoped, because a PBT change moves the threshold under all of them (SPEC 17).
+    `amounts` maps line item type to a new CY amount; `prior_amounts` optionally does the same
+    for PY. Materiality is recalculated and every line item re-scoped, because a current-year
+    turnover or PBT change moves the threshold under all of them. A PY-only edit still changes
+    the edited area's derived metrics, so it is an assessment input too.
 
-    Only areas whose scope *changed* run LLM calls: one entering runs both of its calls, one
-    leaving is cleared deterministically. An area that stays in scope keeps its existing work
-    even where its own figures moved — SPEC 17 ties the rerun to scope, and re-analysing on
-    every figure edit would discard auditor overrides across the whole engagement. Where the
-    auditor wants that work redone, `run_area` is the explicit way to ask for it.
+    An edited area that remains in scope runs both calls, because its amount and derived metrics
+    are direct inputs to its assessment. An area entering scope does the same; an area leaving
+    scope is cleared deterministically. A materiality-benchmark edit re-scopes every line item,
+    but it does not re-run areas whose scope did not change — their own financial inputs did not
+    change. This preserves unrelated audit work and its overrides.
     """
     config = config or get_config()
-    unknown = set(amounts) - {li.line_item_type for li in engagement.line_items}
+    prior_amounts = prior_amounts or {}
+    known = {li.line_item_type for li in engagement.line_items}
+    unknown = (set(amounts) | set(prior_amounts)) - known
     if unknown:
         raise RecomputeError(f"{sorted(unknown)} are not line items in this engagement")
+    values = [*amounts.values(), *prior_amounts.values()]
+    if any(not isinstance(value, int | float) or not math.isfinite(value) for value in values):
+        raise RecomputeError("financial amounts must be finite numbers")
+    if "turnover" in amounts and amounts["turnover"] <= 0:
+        raise RecomputeError("turnover must be greater than zero for materiality")
 
-    changed = {
-        line_item_type: amount
-        for line_item_type, amount in amounts.items()
-        if engagement.line_item(line_item_type).cy != amount
-    }
+    changed: dict[str, dict[str, float]] = {}
+    for line_item_type in set(amounts) | set(prior_amounts):
+        item = engagement.line_item(line_item_type)
+        fields: dict[str, float] = {}
+        if line_item_type in amounts and item.cy != amounts[line_item_type]:
+            fields["cy"] = amounts[line_item_type]
+        if line_item_type in prior_amounts and item.py != prior_amounts[line_item_type]:
+            fields["py"] = prior_amounts[line_item_type]
+        if fields:
+            changed[line_item_type] = fields
     if not changed:
         return None
 
-    before = {t: engagement.line_item(t).cy for t in changed}
+    before = {
+        line_item_type: {
+            field: getattr(engagement.line_item(line_item_type), field)
+            for field in fields
+        }
+        for line_item_type, fields in changed.items()
+    }
     state = capture(engagement)
 
     try:
-        for line_item_type, amount in changed.items():
-            engagement.line_item(line_item_type).cy = amount
+        for line_item_type, fields in changed.items():
+            item = engagement.line_item(line_item_type)
+            for field, amount in fields.items():
+                setattr(item, field, amount)
 
         was_in_scope = {li.id for li in engagement.in_scope_audit_areas}
         engagement.materiality = calculate_materiality(engagement)
@@ -673,7 +697,8 @@ def update_financials(
 
         for line_item in engagement.line_items:
             in_scope_now = line_item.material is True and line_item.is_audit_area
-            if in_scope_now and line_item.id not in was_in_scope:
+            amount_changed = line_item.line_item_type in changed
+            if in_scope_now and (line_item.id not in was_in_scope or amount_changed):
                 run_area(line_item, engagement, client=client, config=config)
             elif not in_scope_now and line_item.id in was_in_scope:
                 clear_area(line_item)

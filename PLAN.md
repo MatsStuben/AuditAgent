@@ -463,7 +463,7 @@ replacing procedure work for unrelated assertions in the same audit area.
 | `override_assertion_relevance` → relevant | re-analyses that area, then reselects its procedures. **Replaces every assertion and risk in the area**, discarding overrides held on them — the UI must warn first | 2 |
 | `override_procedures` (add/remove/approve) | coverage only. "Remove" means detaching one `risk_id`; the procedure survives if it still covers others, and is dropped only when its last reference goes | 0 |
 | `update_company_context` | re-extract facts, then both calls for every audit area | 1 + 2n |
-| `update_financials` | materiality → scoping → both calls for any area entering or leaving scope | ≤ 2n |
+| `update_financials` | materiality → scoping → both calls for an edited in-scope area or an area entering scope; clear an area leaving scope | ≤ 2n |
 
 The risk-rating row is the one that matters most: it is the common override, it is Scenario D, and routing it
 around re-analysis is what keeps the original system output intact. It must also preserve procedure objects
@@ -682,7 +682,7 @@ item table (all 8, showing metrics, material flag, and whether it is an audit ar
 editable fact list; per-audit-area assertion cards with a relevance toggle and rationale; risk cards showing
 likelihood, magnitude and the matrix-derived `system_rating` alongside `final_rating`, with an override
 control and reason box;
-procedure lists with add-from-catalogue / add-auditor-procedure / remove / approve-AI-suggestion; a traceability view for a selected
+procedure lists with add-from-catalogue / add-auditor-procedure / remove / approve-AI-suggestion; editable current-year financials with a traceability view for a selected
 procedure; an ISA coverage panel; a feedback log with an "analyse for methodology rule" action and the
 resulting pending proposals.
 

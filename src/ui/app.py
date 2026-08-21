@@ -36,6 +36,7 @@ from src.engine.recompute import (
     remove_procedure,
     update_company_context,
     update_company_facts,
+    update_financials,
 )
 from src.engine.traceability import TraceabilityError, trace_procedure
 from src.llm.client import AnthropicLLMClient, LLMError
@@ -156,6 +157,56 @@ def render_line_items() -> None:
             }
         )
     st.dataframe(rows, hide_index=True, width="stretch")
+
+    with st.form("financials"):
+        st.caption(
+            "Editing a figure recalculates metrics, materiality and scope. A changed audit area "
+            "is re-analysed with its procedures; areas entering or leaving scope are run or "
+            "cleared. Unrelated areas stay untouched. Re-analysis replaces the changed area's "
+            "current risks, procedures and overrides."
+        )
+        edited = st.data_editor(
+            [
+                {
+                    "line item": item.line_item_type,
+                    "CY": item.cy,
+                    "PY": item.py,
+                }
+                for item in audit.line_items
+            ],
+            column_config={
+                "CY": st.column_config.NumberColumn("CY", format="%.2f"),
+                "PY": st.column_config.NumberColumn("PY", format="%.2f"),
+            },
+            disabled=["line item"],
+            hide_index=True,
+            width="stretch",
+            key="financialrows",
+        )
+        reason = st.text_input("Why are the figures changing?", key="financialreason")
+        submitted = st.form_submit_button("Save financials and update affected audit areas")
+
+    if submitted:
+        amounts = {str(row["line item"]): float(row["CY"]) for row in edited}
+        prior_amounts = {str(row["line item"]): float(row["PY"]) for row in edited}
+        if amounts["turnover"] <= 0:
+            st.error("Turnover must be greater than zero because materiality requires it.")
+        elif all(
+            audit.line_item(name).cy == amount and audit.line_item(name).py == prior_amounts[name]
+            for name, amount in amounts.items()
+        ):
+            st.info("Unchanged — nothing to re-run.")
+        else:
+            act(
+                update_financials,
+                audit,
+                amounts,
+                reason,
+                prior_amounts=prior_amounts,
+                client=client(),
+                config=config(),
+                success="Financials updated and affected audit areas re-run.",
+            )
 
 
 # --- context and facts ---------------------------------------------------------------------------

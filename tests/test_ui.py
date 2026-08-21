@@ -82,6 +82,37 @@ def test_the_line_item_table_shows_all_eight_with_their_status(engagement, stati
     assert statuses["turnover"] == "material — audit logic not implemented in MVP"
 
 
+def test_editing_financials_reruns_only_the_changed_audit_area(engagement, static_config):
+    client = ScriptedLLMClient(
+        analyse_audit_area=scripted_analysis(
+            Assertion.VALUATION, static_config.candidate_assertions("inventory")
+        ),
+        select_procedures=scripted_selection("INV_SUBSEQUENT_SALES", "risk_3"),
+    )
+    cash = engagement.line_item("cash")
+    before_cash = (cash.assertions, cash.procedures)
+    at = app(engagement, static_config, client)
+
+    at.session_state["financialrows"] = {
+        "edited_rows": {2: {"CY": 8_800_000}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+    at.text_input(key="financialreason").set_value("Final count completed.")
+    at = next(
+        button
+        for button in at.button
+        if button.label == "Save financials and update affected audit areas"
+    ).click().run()
+
+    audit = at.session_state["engagement"]
+    assert audit.line_item("inventory").cy == 8_800_000
+    assert [risk.id for risk in audit.line_item("inventory").all_risks] == ["risk_3"]
+    assert audit.line_item("cash").assertions is before_cash[0]
+    assert audit.line_item("cash").procedures is before_cash[1]
+    assert client.call_count() == 2
+
+
 def test_a_gap_is_surfaced_rather_than_left_to_be_noticed(engagement, static_config):
     """Removing the only response to a risk must show as an ISA 330.6/7 gap."""
     engagement.line_item("inventory").procedures = []

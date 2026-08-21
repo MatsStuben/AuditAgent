@@ -1059,9 +1059,10 @@ company context changes
 → rerun procedure selection for every audit area       [1 call per area]
 → rerun ISA coverage
 
-PBT changes
-→ materiality changes
+current- or prior-year financial line item changes
+→ materiality changes when turnover or PBT changes
 → line item scope may change
+→ if the edited item remains an audit area, rerun its analysis and procedure selection [2 LLM calls]
 → an area ENTERING scope runs both of its calls        [2 LLM calls]
 → an area LEAVING scope has its assertions, risks and
   procedures cleared                                   [0 LLM calls]
@@ -1084,10 +1085,11 @@ the assertion is left carrying no risks. Coverage then reports the ISA 315.28(b)
 the honest outcome: the engine holds no risk for that assertion, and inventing one to close the
 gap would present a fabrication as an assessment.
 
-A figures change reruns an audit area only where its **scope** changed. An area that stays in
-scope keeps its existing work even where its own amount moved, because re-analysis discards every
-override held in that area and a figure edit is not, by itself, a reason to destroy the auditor's
-judgements. Re-running such an area is available explicitly, not automatic.
+An edited line item that remains in scope is re-analysed because its amount and derived metrics
+are direct inputs to its risk assessment. That replaces the work and overrides in that one area.
+Changing a materiality benchmark re-scopes every item, but does not re-run other areas when their
+scope remains unchanged: their own financial inputs are unchanged, so preserving their work and
+overrides is the narrower correct dependency boundary.
 
 ```text
 company facts edited
