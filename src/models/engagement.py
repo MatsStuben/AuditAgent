@@ -3,7 +3,7 @@
 from pydantic import BaseModel, Field
 
 from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
-from src.models.feedback import AuditorFeedback, RuleProposal
+from src.models.feedback import AuditorFeedback, FeedbackAnalysis, RuleProposal
 
 
 class CompanyFact(BaseModel):
@@ -118,6 +118,12 @@ class AuditEngagement(BaseModel):
 
     Runtime only. Nothing here is applied to the engagement or written back to the static
     config files — a proposal is a suggestion to a methodology owner, not a change.
+    """
+    feedback_analyses: list[FeedbackAnalysis] = Field(default_factory=list)
+    """One durable LLM outcome per feedback record (SPEC 19).
+
+    This includes engagement-specific conclusions as well as candidate rules, so the feedback
+    log can explain why no rule was proposed rather than silently returning to its button.
     """
     id_sequences: dict[str, int] = Field(default_factory=dict)
     """Monotonic ID counters, one per object-type prefix. See `next_id`."""

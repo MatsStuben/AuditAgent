@@ -27,7 +27,7 @@ from src.llm.schemas import (
     MethodologyRuleProposalOutput,
 )
 from src.models.audit_objects import RiskLevel
-from src.models.feedback import AuditorFeedback, RuleProposalStatus
+from src.models.feedback import AuditorFeedback, FeedbackAnalysisOutcome, RuleProposalStatus
 from tests.conftest import CASH_RISK, INVENTORY_RISK, scripted_selection
 from tests.fakes import ScriptedLLMClient
 
@@ -95,9 +95,25 @@ def test_a_generalisable_reason_becomes_a_pending_proposal(overridden):
 
 
 def test_an_engagement_specific_reason_proposes_nothing(overridden):
-    assert generalize_feedback(overridden.feedback[0], overridden, client=_client(_specific()))\
-        is None
+    feedback = overridden.feedback[0]
+
+    assert generalize_feedback(feedback, overridden, client=_client(_specific())) is None
     assert overridden.rule_proposals == []
+    assert len(overridden.feedback_analyses) == 1
+    analysis = overridden.feedback_analyses[0]
+    assert analysis.source_feedback_id == feedback.id
+    assert analysis.outcome is FeedbackAnalysisOutcome.ENGAGEMENT_SPECIFIC
+    assert "contractual pre-sale" in analysis.reason
+
+
+def test_reanalysing_an_engagement_specific_result_does_not_make_another_call(overridden):
+    feedback = overridden.feedback[0]
+    generalize_feedback(feedback, overridden, client=_client(_specific()))
+    client = _client(_specific("A different answer."))
+
+    assert generalize_feedback(feedback, overridden, client=client) is None
+    assert client.calls == []
+    assert len(overridden.feedback_analyses) == 1
 
 
 def test_a_proposal_is_filed_on_the_engagement_and_traces_to_its_override(overridden):
@@ -107,6 +123,7 @@ def test_a_proposal_is_filed_on_the_engagement_and_traces_to_its_override(overri
     source = next(f for f in overridden.feedback if f.id == proposal.source_feedback_id)
     assert source.before == {"final_rating": "high"}
     assert source.after == {"final_rating": "low"}
+    assert overridden.feedback_analyses[0].proposal_id == proposal.id
 
 
 def test_proposals_accumulate_rather_than_replace(static_config, overridden):

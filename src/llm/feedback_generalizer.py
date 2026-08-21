@@ -33,7 +33,13 @@ from src.llm.prompts import GENERALIZE_FEEDBACK
 from src.llm.schemas import FeedbackClassificationOutput, MethodologyRuleProposalOutput
 from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
 from src.models.engagement import AuditEngagement, FinancialLineItemAssessment
-from src.models.feedback import AuditorFeedback, RuleProposal, RuleProposalStatus
+from src.models.feedback import (
+    AuditorFeedback,
+    FeedbackAnalysis,
+    FeedbackAnalysisOutcome,
+    RuleProposal,
+    RuleProposalStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,9 +207,9 @@ def generalize_feedback(
     rather than replace, because each one refers to a different override and none of them is
     superseded by the next.
 
-    Re-analysing an existing proposal's feedback returns that proposal without spending a
-    call: two pending proposals for one override would be the same question asked twice of a
-    reviewer.
+    Re-analysing feedback whose outcome is already recorded returns that outcome without
+    spending a call. This applies to engagement-specific conclusions too: the auditor should
+    be able to see why no rule was proposed, not repeatedly pay to ask the same question.
 
     The argument identifies the record; the engagement supplies it. Everything below is read
     from the engagement's own copy, so a caller holding a deserialised or edited record with
@@ -221,10 +227,27 @@ def generalize_feedback(
             f"input rather than a judgement the auditor overrode; nothing to generalise"
         )
 
+    analysis = next(
+        (a for a in engagement.feedback_analyses if a.source_feedback_id == record.id), None
+    )
+    if analysis is not None:
+        if analysis.proposal_id is None:
+            return None
+        return next(p for p in engagement.rule_proposals if p.id == analysis.proposal_id)
+
     existing = next(
         (p for p in engagement.rule_proposals if p.source_feedback_id == record.id), None
     )
     if existing is not None:
+        # Compatibility with engagements created before feedback analyses were persisted.
+        engagement.feedback_analyses.append(
+            FeedbackAnalysis(
+                source_feedback_id=record.id,
+                outcome=FeedbackAnalysisOutcome.METHODOLOGY_RULE_PROPOSAL,
+                reason=existing.reason,
+                proposal_id=existing.id,
+            )
+        )
         return existing
 
     output = client.parse(
@@ -236,6 +259,13 @@ def generalize_feedback(
     classification = output.classification
 
     if not isinstance(classification, MethodologyRuleProposalOutput):
+        engagement.feedback_analyses.append(
+            FeedbackAnalysis(
+                source_feedback_id=record.id,
+                outcome=FeedbackAnalysisOutcome.ENGAGEMENT_SPECIFIC,
+                reason=classification.reason.strip(),
+            )
+        )
         logger.info(
             "%s judged engagement-specific: %s", record.id, classification.reason.strip()
         )
@@ -246,6 +276,13 @@ def generalize_feedback(
     if not condition or not action:
         # A rule with no condition applies always, and one with no action asks for nothing.
         # Either way a reviewer has nothing to approve, so it is dropped rather than filed.
+        engagement.feedback_analyses.append(
+            FeedbackAnalysis(
+                source_feedback_id=record.id,
+                outcome=FeedbackAnalysisOutcome.INCOMPLETE_RULE_PROPOSAL,
+                reason=classification.reason.strip(),
+            )
+        )
         logger.warning(
             "discarding a rule proposal for %s: condition or action is empty", record.id
         )
@@ -260,4 +297,12 @@ def generalize_feedback(
         status=RuleProposalStatus.PENDING_REVIEW,
     )
     engagement.rule_proposals.append(proposal)
+    engagement.feedback_analyses.append(
+        FeedbackAnalysis(
+            source_feedback_id=record.id,
+            outcome=FeedbackAnalysisOutcome.METHODOLOGY_RULE_PROPOSAL,
+            reason=classification.reason.strip(),
+            proposal_id=proposal.id,
+        )
+    )
     return proposal

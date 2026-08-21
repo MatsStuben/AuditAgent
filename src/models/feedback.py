@@ -12,6 +12,14 @@ class RuleProposalStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class FeedbackAnalysisOutcome(StrEnum):
+    """What the feedback-classification model concluded."""
+
+    ENGAGEMENT_SPECIFIC = "engagement_specific"
+    METHODOLOGY_RULE_PROPOSAL = "methodology_rule_proposal"
+    INCOMPLETE_RULE_PROPOSAL = "incomplete_rule_proposal"
+
+
 class AuditorFeedback(BaseModel):
     """A record of one auditor override (SPEC 18).
 
@@ -40,3 +48,17 @@ class RuleProposal(BaseModel):
     reason: str
     source_feedback_id: str
     status: RuleProposalStatus = RuleProposalStatus.PENDING_REVIEW
+
+
+class FeedbackAnalysis(BaseModel):
+    """The durable outcome of asking the LLM to analyse one feedback record.
+
+    A feedback record can be usefully classified as engagement-specific without producing a
+    `RuleProposal`. Keeping that conclusion lets the auditor see the model's reasoning and
+    prevents a later UI rerun from asking the same question again.
+    """
+
+    source_feedback_id: str
+    outcome: FeedbackAnalysisOutcome
+    reason: str
+    proposal_id: str | None = None

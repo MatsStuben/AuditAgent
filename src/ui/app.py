@@ -41,6 +41,7 @@ from src.llm.client import AnthropicLLMClient, LLMError
 from src.llm.feedback_generalizer import generalize_feedback, is_analysable
 from src.models.audit_objects import AI_SUGGESTION_LABEL, ProcedureSource, RiskLevel
 from src.models.engagement import AuditEngagement, CompanyFact
+from src.models.feedback import FeedbackAnalysisOutcome
 
 RATINGS = [level.value for level in RiskLevel]
 
@@ -500,10 +501,25 @@ def render_feedback() -> None:
         )
         st.caption(record.reason or "No reason given.")
 
-        proposal = next(
-            (p for p in audit.rule_proposals if p.source_feedback_id == record.id), None
+        analysis = next(
+            (a for a in audit.feedback_analyses if a.source_feedback_id == record.id), None
         )
-        if proposal is not None:
+        if analysis is not None:
+            if analysis.outcome is FeedbackAnalysisOutcome.ENGAGEMENT_SPECIFIC:
+                st.info(
+                    "**Engagement-specific — no methodology rule proposed.**  \n"
+                    f"Reason: {analysis.reason or 'No reasoning was provided.'}"
+                )
+            elif analysis.outcome is FeedbackAnalysisOutcome.INCOMPLETE_RULE_PROPOSAL:
+                st.warning(
+                    "**No methodology rule was filed.** The proposed rule was incomplete.  \n"
+                    f"Reason: {analysis.reason or 'No reasoning was provided.'}"
+                )
+            else:
+                st.success(
+                    "**Candidate methodology rule proposed.**  \n"
+                    f"Reason: {analysis.reason or 'No reasoning was provided.'}"
+                )
             continue
         if not is_analysable(record):
             st.caption("Revised input rather than an overridden judgement — not analysable.")

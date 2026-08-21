@@ -15,6 +15,10 @@ from streamlit.testing.v1 import AppTest
 
 from src.engine.recompute import override_risk_rating
 from src.llm.client import LLMError
+from src.llm.schemas import (
+    EngagementSpecificFeedback,
+    FeedbackClassificationOutput,
+)
 from src.models.audit_objects import Assertion, RiskLevel
 from tests.conftest import (
     INVENTORY_RISK,
@@ -219,3 +223,31 @@ def test_the_feedback_log_offers_analysis_only_where_it_applies(engagement, stat
     at = app(engagement, static_config)
 
     assert any(b.label == "Analyse for a methodology rule" for b in at.button)
+
+
+def test_feedback_analysis_shows_an_engagement_specific_outcome(engagement, static_config):
+    override_risk_rating(
+        engagement, INVENTORY_RISK, RiskLevel.LOW, "Pre-sold.",
+        client=ScriptedLLMClient(
+            select_procedures=scripted_selection("INV_SUBSEQUENT_SALES", INVENTORY_RISK)
+        ),
+        config=static_config,
+    )
+    client = ScriptedLLMClient(
+        generalize_feedback=FeedbackClassificationOutput(
+            classification=EngagementSpecificFeedback(
+                type="engagement_specific",
+                reason="This turns on this client's particular contract.",
+            )
+        )
+    )
+    at = app(engagement, static_config, client)
+
+    at = next(
+        button for button in at.button if button.label == "Analyse for a methodology rule"
+    ).click().run()
+
+    analysis = at.session_state["engagement"].feedback_analyses[0]
+    assert analysis.reason == "This turns on this client's particular contract."
+    assert any("Engagement-specific" in info.value for info in at.info)
+    assert any("particular contract" in info.value for info in at.info)
