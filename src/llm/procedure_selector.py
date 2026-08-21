@@ -55,12 +55,18 @@ def _format_risks(
 ) -> str:
     lines = []
     for risk in risks:
-        lines.append(
+        detail = (
             f"- {risk.id} ({_assertion_for(risk, line_item.assertions)}, "
             f"rating: {risk.final_rating.value})\n"
             f"  {risk.risk_description}\n"
             f"  Why: {risk.rationale}"
         )
+        if risk.is_overridden and risk.override_reason:
+            detail += (
+                f"\n  Auditor judgement: the auditor overrode the system rating to "
+                f"{risk.final_rating.value} because {risk.override_reason}"
+            )
+        lines.append(detail)
     return "\n\n".join(lines)
 
 

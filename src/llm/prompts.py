@@ -131,6 +131,11 @@ As the assessed rating increases, the response must be more persuasive: prefer s
 evidence and broader coverage for higher-rated risks, and keep the response proportionate for \
 lower-rated ones.
 
+Where a risk includes an **Auditor judgement**, treat that judgement as the current basis for \
+selecting the response. Do not re-assess or countermand the final rating from the original risk \
+description, context or facts. The auditor judgement is not a company fact: do not cite or \
+restate it as evidence about the company.
+
 If, and only if, no catalogue procedure adequately responds to a risk, you may additionally \
 suggest a new procedure for it. Suggestions are flagged for auditor approval and will not be \
 used without it.

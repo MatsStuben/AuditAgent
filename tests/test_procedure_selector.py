@@ -494,6 +494,21 @@ def test_user_message_shows_final_rating_not_system_rating(engagement, inventory
     assert "system_rating" not in message
 
 
+def test_user_message_labels_an_override_reason_as_auditor_judgement(engagement, inventory):
+    from src.engine.catalogue import catalogue_for_assertions
+
+    overridden = inventory.all_risks[0]
+    overridden.final_rating = RiskLevel.LOW
+    overridden.is_overridden = True
+    overridden.override_reason = "The stock is contractually pre-sold."
+
+    subset = catalogue_for_assertions("inventory", [Assertion.EXISTENCE, Assertion.VALUATION])
+    message = build_user_message(inventory, engagement, subset)
+
+    assert "Auditor judgement" in message
+    assert "contractually pre-sold" in message
+
+
 def test_user_message_offers_only_the_areas_catalogue(engagement, inventory):
     from src.engine.catalogue import catalogue_for_assertions
 

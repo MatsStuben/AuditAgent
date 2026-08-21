@@ -39,6 +39,7 @@ GENERALISABLE = (
     "several years, subsequent-sales testing adds nothing over the ageing review and should "
     "not be required."
 )
+SUBSEQUENT_SALES = "INV_SUBSEQUENT_SALES"
 ENGAGEMENT_SPECIFIC = (
     "This particular customer contract was signed after year end and I have seen the "
     "documentation myself."
@@ -129,7 +130,11 @@ def test_a_generalisable_reason_produces_a_pending_rule(run_a, capsys):
     """
     engagement = fresh(run_a)
     inventory = audit_area(engagement, INVENTORY)
-    procedure = inventory.procedures[0]
+    procedure = next(
+        (p for p in inventory.procedures if p.procedure_id == SUBSEQUENT_SALES), None
+    )
+    if procedure is None:
+        pytest.skip("Scenario A selected no subsequent-sales procedure to remove")
     feedback = remove_procedure(
         engagement, procedure.id, procedure.risk_ids[0], GENERALISABLE
     )
