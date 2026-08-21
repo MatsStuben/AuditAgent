@@ -11,12 +11,24 @@ auditor changed it to, the reason they gave, and the engagement context around i
 outlives the object it describes (SPEC 18) — re-analysing an area discards its risks while the
 record survives — so a description that no longer resolves says so rather than raising. The
 `before`/`after` snapshot still carries the substance of the override in that case.
+
+Two boundaries are deterministic, decided here rather than by the model:
+
+**Only judgement overrides are analysable.** An assertion, a risk or a procedure is a conclusion
+the engine reached and the auditor disagreed with — the thing SPEC 19 exists to learn from.
+Revising the company context or the figures is *new input*, not a disagreement; what follows from
+it is dependency logic the engine already owns (SPEC 17). Generalising one would invite rules
+about how the engine should respond to its own inputs.
+
+**The context comes from the record, not from live state.** `AuditorFeedback.engagement_context`
+holds the circumstances as they stood when the override was made. Facts are re-extracted and
+figures revised as an engagement progresses, and letting a later state reach a proposal
+attributed to an older override would misdescribe what the auditor decided.
 """
 
 import logging
 
 from src.llm.client import LLMClient, LLMTask
-from src.llm.formatting import format_company_facts
 from src.llm.prompts import GENERALIZE_FEEDBACK
 from src.llm.schemas import FeedbackClassificationOutput, MethodologyRuleProposalOutput
 from src.models.audit_objects import AssertionAssessment, Procedure, RiskAssessment
@@ -27,13 +39,24 @@ logger = logging.getLogger(__name__)
 
 RULE_PROPOSAL_ID_PREFIX = "rule"
 
+#: Overrides of a system *judgement*. Engagement-input edits are excluded — see the module
+#: docstring — and the UI should offer no analysis action for them.
+ANALYSABLE_OBJECT_TYPES = frozenset(
+    {"assertion_assessment", "risk_assessment", "procedure"}
+)
+
 UNRESOLVED = (
     "This object is no longer in the audit file; the override snapshot is all that remains."
 )
 
 
 class FeedbackGeneralizationError(ValueError):
-    """The feedback does not belong to this engagement."""
+    """The feedback does not belong to this engagement, or is not a judgement override."""
+
+
+def is_analysable(feedback: AuditorFeedback) -> bool:
+    """Whether this record can become a methodology proposal (SPEC 19). Deterministic."""
+    return feedback.object_type in ANALYSABLE_OBJECT_TYPES
 
 
 # --- describing what was overridden --------------------------------------------------------
@@ -88,23 +111,8 @@ def _describe_procedure(area: FinancialLineItemAssessment, procedure: Procedure)
     )
 
 
-def _describe_engagement_change(engagement: AuditEngagement, object_id: str) -> str:
-    """A context or figures edit is not an override of a system conclusion.
-
-    Said plainly, because the model is being asked to generalise a *judgement*, and revised
-    source data is not one — it is new input, and the engine's response to it is a rerun.
-    """
-    return (
-        f"Not an override of a system conclusion: the auditor revised the engagement's "
-        f"{object_id.replace('_', ' ')}, and the engine re-ran on the new input."
-    )
-
-
 def describe_overridden_object(engagement: AuditEngagement, feedback: AuditorFeedback) -> str:
     """The system's original proposal, as far as it still exists."""
-    if feedback.object_type == "engagement":
-        return _describe_engagement_change(engagement, feedback.object_id)
-
     located = _locate(engagement, feedback.object_id)
     if located is None:
         return UNRESOLVED
@@ -123,16 +131,46 @@ def _format_change(values: dict) -> str:
     return ", ".join(f"{key}: {value}" for key, value in values.items())
 
 
+def _format_amount(value: object) -> str:
+    return f"{value:,.0f}" if isinstance(value, int | float) else "not available"
+
+
+def format_engagement_context(snapshot: dict) -> str:
+    """The circumstances as they stood when the override was recorded (SPEC 18).
+
+    Read from `AuditorFeedback.engagement_context`, whose shape is built by
+    `engine.recompute.engagement_context`. Tolerant of missing keys: a record written before a
+    field existed should still be analysable, just with less to go on.
+    """
+    facts = snapshot.get("company_facts") or []
+    fact_lines = (
+        "\n".join(f"- {f['fact_type']}: {f['value']}" for f in facts) or "None extracted."
+    )
+    area = snapshot.get("audit_area") or {}
+    area_lines = (
+        f"\nAudit area: {area['line_item_type']}, amount {_format_amount(area.get('cy'))} "
+        f"({area.get('amount_to_materiality_ratio', 0):.1f}x materiality)"
+        if area
+        else ""
+    )
+    return (
+        f"Company: {snapshot.get('company', 'not recorded')}\n"
+        f"Materiality: {_format_amount(snapshot.get('materiality'))}"
+        f"{area_lines}\n\n"
+        f"Company facts:\n{fact_lines}"
+    )
+
+
 def build_user_message(engagement: AuditEngagement, feedback: AuditorFeedback) -> str:
     """The four inputs SPEC 19 names, and no more.
 
     Deliberately excludes the rest of the audit file. The question is whether *this* reasoning
     generalises, and showing unrelated areas would invite a rule drawn from work the auditor
     never commented on.
+
+    The engagement rung comes from the record's own snapshot, so the model sees what the
+    auditor saw rather than whatever the file has since become.
     """
-    materiality = (
-        f"{engagement.materiality.amount:,.0f}" if engagement.materiality else "not calculated"
-    )
     return f"""\
 Original system proposal:
 
@@ -145,12 +183,8 @@ Auditor change:
 Reason the auditor gave:
 {feedback.reason.strip() or "None given."}
 
-Engagement context:
-Company: {engagement.company}
-Materiality: {materiality}
-
-Company facts:
-{format_company_facts(engagement)}"""
+Engagement context, as it stood when the override was made:
+{format_engagement_context(feedback.engagement_context)}"""
 
 
 # --- the call -------------------------------------------------------------------------------
@@ -170,14 +204,25 @@ def generalize_feedback(
     Re-analysing an existing proposal's feedback returns that proposal without spending a
     call: two pending proposals for one override would be the same question asked twice of a
     reviewer.
+
+    The argument identifies the record; the engagement supplies it. Everything below is read
+    from the engagement's own copy, so a caller holding a deserialised or edited record with
+    the same ID cannot have a proposal filed against the real record's ID while the model was
+    shown something else.
     """
-    if not any(record.id == feedback.id for record in engagement.feedback):
+    record = next((f for f in engagement.feedback if f.id == feedback.id), None)
+    if record is None:
         raise FeedbackGeneralizationError(
             f"{feedback.id} is not a feedback record of this engagement"
         )
+    if not is_analysable(record):
+        raise FeedbackGeneralizationError(
+            f"{record.id} records a change to the engagement's {record.object_id}, which is new "
+            f"input rather than a judgement the auditor overrode; nothing to generalise"
+        )
 
     existing = next(
-        (p for p in engagement.rule_proposals if p.source_feedback_id == feedback.id), None
+        (p for p in engagement.rule_proposals if p.source_feedback_id == record.id), None
     )
     if existing is not None:
         return existing
@@ -185,14 +230,14 @@ def generalize_feedback(
     output = client.parse(
         task=LLMTask.GENERALIZE_FEEDBACK,
         system=GENERALIZE_FEEDBACK,
-        user=build_user_message(engagement, feedback),
+        user=build_user_message(engagement, record),
         output_format=FeedbackClassificationOutput,
     )
     classification = output.classification
 
     if not isinstance(classification, MethodologyRuleProposalOutput):
         logger.info(
-            "%s judged engagement-specific: %s", feedback.id, classification.reason.strip()
+            "%s judged engagement-specific: %s", record.id, classification.reason.strip()
         )
         return None
 
@@ -202,7 +247,7 @@ def generalize_feedback(
         # A rule with no condition applies always, and one with no action asks for nothing.
         # Either way a reviewer has nothing to approve, so it is dropped rather than filed.
         logger.warning(
-            "discarding a rule proposal for %s: condition or action is empty", feedback.id
+            "discarding a rule proposal for %s: condition or action is empty", record.id
         )
         return None
 
@@ -211,7 +256,7 @@ def generalize_feedback(
         condition=condition,
         action=action,
         reason=classification.reason.strip(),
-        source_feedback_id=feedback.id,
+        source_feedback_id=record.id,
         status=RuleProposalStatus.PENDING_REVIEW,
     )
     engagement.rule_proposals.append(proposal)

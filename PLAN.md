@@ -522,6 +522,22 @@ runtime objects only, which is the point of SPEC §19.
 `procedure_catalogue.json`, `audit_area_profiles.json` and `risk_matrix.json` are byte-identical before and
 after (proves no auto-update of methodology).
 
+**As built.** Eligibility is deterministic: `is_analysable` admits only assertion, risk and procedure
+overrides, and the two engagement-input records raise instead — revised source data is new input,
+not a judgement, and what follows from it is M11's dependency logic. The engagement context rung of
+the prompt is read from `AuditorFeedback.engagement_context`, snapshotted by `record_feedback` when
+the override was made, so a later re-extraction cannot reach a proposal attributed to an earlier
+judgement. The record is resolved from `engagement.feedback` by ID, so a same-ID copy cannot have a
+proposal filed against the real record while the model was shown something else.
+
+`AuditEngagement.rule_proposals` holds the filed proposals; unlike the pipeline's
+outputs they accumulate rather than replace, since each refers to a different override. Re-analysing
+a feedback record that already has a proposal returns it without spending a call. A returned rule
+with a blank condition or action is dropped — one applies always, the other asks for nothing, and a
+reviewer has nothing to approve either way. The prompt carries only the four SPEC 19 inputs, so no
+rule can be drawn from work the auditor never commented on, and a record whose object has since been
+replaced still generalises from its `before`/`after` snapshot (SPEC 18).
+
 **Depends on:** M11.
 
 ---
@@ -601,6 +617,13 @@ relevant-assertion count catches the opposite failure — a model that marks eve
 
 `run_evals.py` prints a side-by-side A/B table so prompt tuning has a fixed target to read.
 
+**As built.** A and B share an identical cash paragraph as well as identical financials. SPEC §22
+describes only the inventory narrative, but leaving cash unsaid in both would put every run under
+the Scenario F pressure and make any difference in the cash area noise rather than signal. The
+scenario runs moved into `evals/conftest.py` as **session** fixtures — four runs, twenty calls,
+shared by every eval module — and `scenarios.fresh()` hands out deep copies to anything that
+mutates, so one eval's override cannot become another's starting state.
+
 **Verify:** `pytest -m eval`. Uses the key in `.env` (Decision log #4).
 
 **Depends on:** M8.
@@ -624,6 +647,12 @@ relevant-assertion count catches the opposite failure — a model that marks eve
 
 D and E are already covered deterministically in M11/M12 against the fake; these run the same paths against the
 live model.
+
+**As built.** E is checked in both directions. A classifier that always proposes a rule would pass the
+generalisable case, so a second call puts a deliberately one-off reason through the same path and asserts
+nothing is proposed — that pair is the evidence the classifier discriminates. D also checks the *shape* of
+what a live re-selection returned: every procedure traces, no risk ID dangles, and coverage is clean, which
+is the failure a schema-valid but half-linked response would otherwise pass.
 
 **Verify:** `pytest -m eval`.
 

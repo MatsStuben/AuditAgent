@@ -21,35 +21,18 @@ from evals.scenarios import (
     ambiguous_terms,
     analysis_text,
     fact_text,
-    rich_context,
-    run_scenario,
     selection_text,
     silence_language,
     supplied_to_analysis,
     supplied_to_selection,
     unsupported_terms,
 )
-from src.config.loader import load_config
 from src.models.audit_objects import Assertion, RiskLevel
 
 pytestmark = pytest.mark.eval
 
-
-@pytest.fixture(scope="module")
-def config():
-    return load_config()
-
-
-@pytest.fixture(scope="module")
-def minimal_run(config):
-    """The short context: nothing whatsoever is supplied about cash."""
-    return run_scenario(MINIMAL_CONTEXT, config)
-
-
-@pytest.fixture(scope="module")
-def rich_run(config):
-    """The demo default, which supplies both areas explicitly."""
-    return run_scenario(rich_context(config), config)
+# `config`, `minimal_run` and `rich_run` are session fixtures in `conftest.py`, shared with the
+# other eval modules so one five-call run answers everything asked of it.
 
 
 # --- no unsupported company specifics ---------------------------------------------------

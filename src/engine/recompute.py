@@ -64,6 +64,39 @@ class RecomputeError(ValueError):
 # --- feedback ----------------------------------------------------------------------------
 
 
+def engagement_context(
+    engagement: AuditEngagement, line_item: FinancialLineItemAssessment | None
+) -> dict:
+    """The circumstances the auditor was judging against, small enough to keep (SPEC 18, 19).
+
+    Stored on the record so a later reader — `llm.feedback_generalizer` above all — reasons
+    about the engagement as it stood when the override was made, not as it stands now. Facts
+    are re-extracted and figures revised as an engagement progresses, and attributing a
+    proposal to an old override while feeding the model newer circumstances would misdescribe
+    what the auditor actually decided.
+
+    Bounded to the overridden object's own audit area. The whole audit file would put work the
+    auditor never commented on into a judgement about their reasoning.
+    """
+    snapshot: dict = {
+        "company": engagement.company,
+        "materiality": engagement.materiality.amount if engagement.materiality else None,
+        "company_facts": [
+            {"id": f.id, "fact_type": f.fact_type, "value": f.value}
+            for f in engagement.company_facts
+        ],
+    }
+    if line_item is not None:
+        snapshot["audit_area"] = {
+            "line_item_type": line_item.line_item_type,
+            "cy": line_item.cy,
+            "amount_to_materiality_ratio": (
+                line_item.metrics.amount_to_materiality_ratio if line_item.metrics else None
+            ),
+        }
+    return snapshot
+
+
 def record_feedback(
     engagement: AuditEngagement,
     *,
@@ -72,11 +105,18 @@ def record_feedback(
     before: dict,
     after: dict,
     reason: str,
+    line_item: FinancialLineItemAssessment | None = None,
 ) -> AuditorFeedback:
     """Append one override record and return it (SPEC 18).
 
     `before` is captured from live state before the mutation; the record is appended after the
     recompute succeeds, so the log never claims a change that did not land.
+
+    The context snapshot is taken here, at commit time, and that is the same state the auditor
+    judged against: no judgement override touches the facts, the figures or materiality. The
+    two engagement-input edits do move them, and their snapshot is therefore of the revised
+    state — which is correct for a record of new input, and moot besides, since those records
+    are not analysable for methodology (SPEC 19).
     """
     feedback = AuditorFeedback(
         id=engagement.next_id(FEEDBACK_ID_PREFIX),
@@ -85,6 +125,7 @@ def record_feedback(
         before=before,
         after=after,
         reason=reason,
+        engagement_context=engagement_context(engagement, line_item),
     )
     engagement.feedback.append(feedback)
     return feedback
@@ -265,6 +306,7 @@ def override_risk_rating(
         before=before,
         after={"final_rating": final_rating.value},
         reason=reason,
+        line_item=line_item,
     )
 
 
@@ -301,6 +343,7 @@ def override_assertion_relevance(
             before={"relevant": not relevant},
             after={"relevant": relevant},
             reason=reason,
+            line_item=line_item,
         )
 
     if not relevant:
@@ -375,6 +418,7 @@ def add_catalogue_procedure(
             before=before,
             after={"risk_ids": list(existing.risk_ids)},
             reason=reason,
+            line_item=line_item,
         )
 
     procedure = Procedure(
@@ -398,6 +442,7 @@ def add_catalogue_procedure(
         before={},
         after={"procedure_id": entry.id, "risk_ids": [risk_id]},
         reason=reason,
+        line_item=line_item,
     )
 
 
@@ -427,6 +472,7 @@ def remove_procedure(
         before=before,
         after={"risk_ids": remaining},
         reason=reason,
+        line_item=line_item,
     )
 
 
@@ -438,7 +484,7 @@ def approve_procedure(
     Until this happens the suggestion does not close an ISA 330.6/7 gap, so approval is the
     act that makes it part of the plan.
     """
-    _, procedure = _find_procedure(engagement, procedure_id)
+    line_item, procedure = _find_procedure(engagement, procedure_id)
     if procedure.source is not ProcedureSource.AI_SUGGESTION:
         raise RecomputeError(f"{procedure_id} is a catalogue procedure; approval does not apply")
     if procedure.approved:
@@ -452,6 +498,7 @@ def approve_procedure(
         before={"approved": False},
         after={"approved": True},
         reason=reason,
+        line_item=line_item,
     )
 
 

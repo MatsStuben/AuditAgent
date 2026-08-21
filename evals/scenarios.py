@@ -17,7 +17,14 @@ import re
 from src.config.loader import StaticConfig, get_config
 from src.engine.pipeline import load_engagement, run_pipeline
 from src.llm.client import AnthropicLLMClient
-from src.models.engagement import AuditEngagement
+from src.models.audit_objects import (
+    Assertion,
+    AssertionAssessment,
+    EvidenceStrength,
+    Procedure,
+    RiskLevel,
+)
+from src.models.engagement import AuditEngagement, FinancialLineItemAssessment
 
 #: The context the engine shipped with before the richer one replaced it. Kept because it is
 #: the highest-pressure case for unsupported inference: two sentences about inventory, nothing
@@ -32,6 +39,55 @@ MINIMAL_CONTEXT = (
 def rich_context(config: StaticConfig | None = None) -> str:
     """The demo default, read from `raiatea.json` so the eval cannot drift from it."""
     return (config or get_config()).engagement_input.company_context
+
+
+#: Cash, described identically in Scenarios A and B (SPEC 22).
+#:
+#: A and B exist to isolate one variable, and the scenarios as SPEC 22 states them describe only
+#: inventory. Leaving cash unsaid in both would hold it constant but would also put both runs
+#: under the Scenario F pressure — every cash detail invented — and any A/B difference in the
+#: cash area would then be noise rather than signal. So cash is described, and described the
+#: same way, in both.
+_SHARED_CASH_CONTEXT = (
+    "The company holds cash across three bank accounts, all in GBP. Bank reconciliations "
+    "are prepared monthly. There are no restricted cash balances or foreign-currency "
+    "accounts. The company does not hold material physical cash at year end."
+)
+
+#: Scenario A — lower-risk inventory (SPEC 22). Stable industrial company, non-perishable
+#: stock, low obsolescence, stable demand.
+#:
+#: The stock build is explained, and that is not decoration. Inventory rose 43.5% and sits at
+#: 34x materiality; a build of that size against flat demand is itself an obsolescence signal,
+#: and the first live run rated Scenario A `high` on exactly that reading — correctly. A
+#: low-risk scenario has to be a low-risk story *for these numbers*, or the eval is asking the
+#: model to ignore the figures it was given.
+CONTEXT_A = (
+    "Raiatea manufactures industrial fixings and fasteners for the construction trade. "
+    "Demand has been stable for several years and the product range changes little between "
+    "years. Inventory is non-perishable steel and brass componentry with no shelf life, and "
+    "the company has not written down material amounts of stock in recent years. The "
+    "increase in inventory this year reflects a bulk purchase of standard componentry ahead "
+    "of an announced supplier price rise; the material is used across the whole range and is "
+    "not specific to any customer, contract or season. Inventory "
+    "is held across two warehouses and the company performs a full physical count at year "
+    "end. Some inventory is held on consignment from suppliers, and management applies an "
+    "ageing-based write-down policy to slow-moving stock.\n\n"
+    f"{_SHARED_CASH_CONTEXT}"
+)
+
+#: Scenario B — higher-risk inventory (SPEC 22). Seasonal fashion retailer, rapidly changing
+#: range, meaningful aged inventory. The same closing sentences as A, so the two differ in the
+#: nature of the stock and nothing else.
+CONTEXT_B = (
+    "Raiatea is a fast-growing fashion retailer. Inventory is highly seasonal and the "
+    "product range is replaced several times a year. A meaningful share of inventory is more "
+    "than 12 months old. Inventory "
+    "is held across two warehouses and the company performs a full physical count at year "
+    "end. Some inventory is held on consignment from suppliers, and management applies an "
+    "ageing-based write-down policy to slow-moving stock.\n\n"
+    f"{_SHARED_CASH_CONTEXT}"
+)
 
 
 #: Company-specific circumstances a fashion retailer plausibly has, and that the model
@@ -236,3 +292,84 @@ def run_scenario(context: str, config: StaticConfig | None = None) -> AuditEngag
     engagement = load_engagement(config)
     engagement.company_context = context
     return run_pipeline(engagement, client=AnthropicLLMClient(), config=config)
+
+
+def fresh(engagement: AuditEngagement) -> AuditEngagement:
+    """A private deep copy of a completed run.
+
+    Scenario runs are session-scoped because each costs five live calls, and D and E both
+    mutate the engagement they act on. Handing out copies is what stops one eval's override
+    from becoming another eval's starting state.
+    """
+    return engagement.model_copy(deep=True)
+
+
+# --- reading a completed run ---------------------------------------------------------------
+
+#: Ordinal, for the comparative assertions SPEC 22 C asks for. Ratings are compared by rank
+#: rather than by equality: the claim is that context *moves* risk, not that it lands on a
+#: particular level.
+RISK_RANK: dict[RiskLevel, int] = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
+
+
+def audit_area(engagement: AuditEngagement, line_item_type: str) -> FinancialLineItemAssessment:
+    return next(
+        i for i in engagement.in_scope_audit_areas if i.line_item_type == line_item_type
+    )
+
+
+def assertion_of(
+    engagement: AuditEngagement, line_item_type: str, assertion: Assertion
+) -> AssertionAssessment:
+    area = audit_area(engagement, line_item_type)
+    return next(a for a in area.assertions if a.assertion is assertion)
+
+
+def highest_rating(assertion: AssertionAssessment) -> RiskLevel | None:
+    """The assertion's most severe risk rating, or None if it carries no risks.
+
+    The peak rather than the mean: an assertion carrying one high risk and one low is a high
+    valuation exposure, and averaging would report it as medium.
+    """
+    if not assertion.risks:
+        return None
+    return max((r.final_rating for r in assertion.risks), key=lambda r: RISK_RANK[r])
+
+
+def highest_system_rating(assertion: AssertionAssessment) -> RiskLevel | None:
+    """The peak rating the *engine* reached, before any override.
+
+    Scenario D is specified as high → low (SPEC 22), and an eval that overrides whatever it
+    finds is testing a different experiment whenever the run came back medium — while still
+    passing or failing plausibly.
+    """
+    if not assertion.risks:
+        return None
+    return max((r.system_rating for r in assertion.risks), key=lambda r: RISK_RANK[r])
+
+
+def relevant_assertions(engagement: AuditEngagement, line_item_type: str) -> list[Assertion]:
+    return [
+        a.assertion for a in audit_area(engagement, line_item_type).assertions if a.relevant
+    ]
+
+
+def procedures_for_assertion(
+    engagement: AuditEngagement, line_item_type: str, assertion: Assertion
+) -> list[Procedure]:
+    """The procedures responding to any risk on one assertion."""
+    area = audit_area(engagement, line_item_type)
+    risk_ids = {r.id for r in assertion_of(engagement, line_item_type, assertion).risks}
+    return [p for p in area.procedures if risk_ids & set(p.risk_ids)]
+
+
+def strongest_evidence(procedures: list[Procedure]) -> EvidenceStrength | None:
+    """The most persuasive evidence strength in a procedure set (ISA 330.7).
+
+    AI suggestions carry no assessed strength (SPEC 13) and are skipped: an unapproved
+    suggestion is not evidence the plan has yet.
+    """
+    assessed = [p.evidence_strength for p in procedures if p.evidence_strength is not None]
+    if not assessed:
+        return None
+    return max(assessed, key=lambda s: RISK_RANK[RiskLevel(s.value)])

@@ -1114,6 +1114,13 @@ Example:
 
 Do not simply overwrite the original system output and lose it.
 
+`engagement_context` is a small snapshot of the circumstances the auditor was judging against —
+materiality, the extracted facts, and the overridden object's own audit area — taken when the
+record is written. Facts are re-extracted and figures revised as an engagement progresses, so a
+later reader (Section 19 above all) must reason about the engagement as it stood, not as it now
+stands. It is bounded to that one audit area: the whole file would drag work the auditor never
+commented on into a judgement about their reasoning.
+
 Records are held on the engagement in `feedback`, oldest first, and are append-only. A record
 outlives the object it describes: ruling an assertion back in re-analyses the area and replaces
 every assertion and risk in it, and the feedback log is then the only place the superseded
@@ -1189,6 +1196,27 @@ A human methodology owner later:
 the candidate rule.
 
 For the MVP, it is enough to display the generated rule proposal and its status.
+
+Proposals are held on the engagement in `rule_proposals` and accumulate: each refers to a
+different override, and none is superseded by the next. Analysing an override that already has a
+proposal returns the existing one rather than filing a second — two pending proposals for one
+override is the same question asked twice of a reviewer.
+
+A proposal with a blank condition or a blank action is not filed. A rule with no condition applies
+always and one with no action asks for nothing; either way there is nothing for a methodology owner
+to approve.
+
+**Only overridden judgements are analysable**, and that decision is deterministic rather than the
+model's. An assertion, a risk or a procedure is a conclusion the engine reached and the auditor
+disagreed with — the thing this section exists to learn from. Revising the company context or the
+figures is *new input*, not a disagreement, and what follows from it is the dependency logic of
+Section 17. The UI offers no analysis action for those records.
+
+The analyser sees only the four inputs listed above. Showing it the rest of the audit file would
+invite a rule drawn from work the auditor never commented on, which is not their feedback. Where
+the overridden object no longer exists — re-analysis replaces an area's risks while the record
+survives (Section 18) — the `before`/`after` snapshot carries the override, and the prompt says
+plainly that the object is gone rather than presenting a reconstruction.
 
 ---
 
@@ -1393,6 +1421,16 @@ Expected:
 
 - audit output changes because company context changes.
 
+A and B also describe cash identically. The scenarios vary the inventory narrative, and cash left
+unsaid in both would hold it constant only in the sense that both runs would be inventing — any
+difference in the cash area would then be sampling noise rather than a response to context.
+
+Comparative assertions are paired with absolute bounds. `rank(B) > rank(A)` is equally satisfied
+by a scale that has slid a level, rating aged seasonal stock `low` and stable componentry lower
+still; and a model that marks every assertion relevant passes any check that only looks at
+valuation. So B's valuation risk must be at least `medium`, A's must not be `high`, and A must not
+flag more assertions than B.
+
 ### Scenario D — risk override
 
 Auditor changes a risk rating from high to low.
@@ -1414,6 +1452,14 @@ Expected:
 - LLM classifies it,
 - if generalizable, candidate methodology rule is produced,
 - production methodology remains unchanged.
+
+Run in both directions. A classifier that proposed a rule for everything would satisfy the above,
+so the same path is also given a deliberately one-off reason and must propose nothing. The pair is
+what evidences discrimination; either half alone evidences only that the call returns.
+
+Scenario D is likewise checked for the *shape* of what a live re-selection returned — every
+procedure traces, no risk reference dangles, coverage is clean — because a schema-valid response
+can still leave the area half-linked.
 
 ### Scenario F — unsupported inference
 
